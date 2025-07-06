@@ -16,7 +16,7 @@
  * necessary files to run the prog: commonfiles2.h, chacha.h, one txt file containg the PNBs
  */
 
-#include "../../chachaCipher/header/chacha.h" // chacha round functions
+#include "chacha.h"                           // chacha round functions
 #include <cmath>                              // pow function
 #include <ctime>                              // time
 #include <chrono>                             // execution time duration
