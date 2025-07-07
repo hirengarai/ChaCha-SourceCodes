@@ -1,17 +1,14 @@
 /*
- * REFERENCE IMPLEMENTATION OF some common functions that is used in Salsa, ChaCha & Forrò cipher
+ * REFERENCE IMPLEMENTATION OF some common functions that is used in Salsa, ChaCha 
  *
  * Filename: commonfiles2.h
  *
  * created: 23/9/23
  * updated: 29/6/25
  *
- * by Hiren
- * Research Fellow
- * NTU Singapore
  *
  * Synopsis:
- * This file contains some common functions that is used in Salsa, ChaCha and Forro scheme
+ * This file contains some common functions that is used in Salsa, ChaCha
  */
 #include <algorithm> // sorting purpose
 #include <bitset>    // binary representation
@@ -29,16 +26,12 @@
 
 // == -- -- -- -- -- -- -- -- -- -- ---= =
 
-// using crypto::u8;
-// using crypto::u32;
 
-// typedef uint16_t u16;           // positive integer of 16 bits
-// typedef uint32_t u32;           // positive integer of 32 bits
 using ull = unsigned long long; // 32 - 64 bits memory
 
 using u8 = std::uint8_t;        // positive integer of 8 bits
-using u16 = std::uint_fast16_t; // positive integer of 16 bits
-using u32 = std::uint_fast32_t; // positive integer of 32 bits
+using u16 = std::uint16_t; // positive integer of 16 bits
+using u32 = std::uint32_t; // positive integer of 32 bits
 using u64 = std::uint64_t;      // positive integer of 64 bits
 
 // constexpr size_t WORD_SIZE = word_bit_width<u32>();
@@ -145,23 +138,6 @@ namespace CONFIGURATION
         ull samples_per_loop = 0;
         ull total_loop = 0;
     } samples_config;
-
-    // parameters for PNB values
-    // struct PNB_config
-    // {
-    //     std::string pnb_file;
-    //     bool pnb_pattern_flag = true;
-
-    //     u8 *pnbs = nullptr;
-    //     u8 *pnbs_in_pattern = nullptr;
-    //     u8 *pnbs_in_border = nullptr;
-    //     u8 *rest_pnbs = nullptr;
-
-    //     size_t pnbs_size = 0;
-    //     size_t pnbs_in_pattern_size = 0;
-    //     size_t pnbs_in_border_size = 0;
-    //     size_t rest_pnbs_size = 0;
-    // } pnb_config;
 
     struct PNB_Config
     {
@@ -350,14 +326,7 @@ namespace OPERATIONS
             {
                 for (size_t index{0}; index < KEY_COUNT; ++index)
                     k[index] = GenerateRandom32Bits();
-                // k[0] = GenerateRandom32Bits();
-                // k[1] = GenerateRandom32Bits();
-                // k[2] = GenerateRandom32Bits();
-                // k[3] = GenerateRandom32Bits();
-                // k[4] = GenerateRandom32Bits();
-                // k[5] = GenerateRandom32Bits();
-                // k[6] = GenerateRandom32Bits();
-                // k[7] = GenerateRandom32Bits();
+    
             }
             else
             {
@@ -584,142 +553,6 @@ namespace OPERATIONS
             x1[index] = __builtin_popcount(x[index]);
     }
 
-    // class ARRAYPRINT
-    // {
-    // public:
-    //     void doubleprint(u16 (*arr)[2], size_t rows, size_t columns,
-    //                      std::string sep)
-    //     {
-    //         for (int index{0}; index < rows; ++index)
-    //         {
-    //             std::cout << "(";
-    //             for (int jindex{0}; jindex < 2; ++jindex)
-    //             {
-    //                 if (jindex == 1)
-    //                     std::cout << (unsigned)arr[index][jindex] << ")";
-    //                 else
-    //                     std::cout << (unsigned)arr[index][jindex] << ", ";
-    //             }
-    //             if (rows == 1)
-    //                 std::cout << "";
-    //             if (index == rows - 1)
-    //                 std::cout << "";
-    //             else
-    //                 std::cout << sep;
-    //         }
-    //         std::cout << "\n";
-    //     }
-    //     void singleprint(u16 *arr, size_t rows, std::string sep)
-    //     {
-    //         for (int index{0}; index < rows; ++index)
-    //             std::cout << (unsigned)arr[index] << sep;
-    //     }
-    // } arrayprint;
-
-    // 4 cross 4 matrix form print, by default set to matrix form printing, size set
-    // to 0, set flag to false to not print in matrix form bin is set to false, to
-    // print binary set it to true
-    // void PrintState(CONFIGURATION::Print_Config &params)
-    // {
-    //     if (params.binaryform)
-    //     {
-    //         if (params.matrixform)
-    //         {
-    //             for (size_t index{0}; index < params.size; ++index)
-    //             {
-    //                 std::bitset<WORD_SIZE> temp(params.x[index]);
-    //                 std::string bitsString = temp.to_string();
-
-    //                 // Insert a gap after every 8 bits
-    //                 for (size_t i = 8; i < bitsString.size(); i += 9)
-    //                 {
-    //                     bitsString.insert(i, " ");
-    //                 }
-    //                 std::cout << bitsString << " | ";
-    //                 if (index > 0 && index % 4 == 3)
-    //                     std::cout << "\n";
-    //             }
-    //             std::cout << "\n";
-    //         }
-    //         else
-    //         {
-    //             for (size_t index{0}; index < params.size; ++index)
-    //             {
-    //                 std::bitset<WORD_SIZE> temp(params.x[index]);
-    //                 std::cout << temp << "  ";
-    //             }
-    //             std::cout << "\n";
-    //         }
-    //     }
-    //     else if (params.matrixform)
-    //     {
-    //         if (params.hexform)
-    //         {
-    //             for (size_t index{0}; index < params.size; ++index)
-    //             {
-    //                 printf("%8x ", params.x[index]);
-    //                 if (index > 0 && index % 4 == 3)
-    //                     std::cout << "\n";
-    //             }
-    //             std::cout << "\n";
-    //         }
-    //         else
-    //         {
-    //             for (size_t index{0}; index < params.size; ++index)
-    //             {
-    //                 printf("%8d ", params.x[index]);
-    //                 if (index > 0 && index % 4 == 3)
-    //                     std::cout << "\n";
-    //             }
-    //             std::cout << "\n";
-    //         }
-    //     }
-    //     else
-    //     {
-    //         for (size_t index{0}; index < params.size; ++index)
-    //             printf("%u ", params.x[index]);
-    //         std::cout << "\n";
-    //     }
-    // }
-    // // print other states in hex mode, e.g key or IV
-    // void PrintAnyArray(u32 *k, size_t size)
-    // {
-    //     for (int index{0}; index < size; ++index)
-    //     {
-    //         printf("%8x ", k[index]);
-    //         if (index > 0 && index % 4 == 3)
-    //             std::cout << "\n";
-    //     }
-    // }
-
-    // // all the values of x are set to value, by defualt it is set to 0
-    // void ResetState(u32 *x, u32 size, u32 value = -1)
-    // {
-    //     if (value == -1)
-    //     {
-    //         for (int i{0}; i < size; ++i)
-    //             x[i] = 0x0;
-    //     }
-    //     else
-    //     {
-    //         for (int i{0}; i < size; ++i)
-    //             x[i] = value;
-    //     }
-    // }
-
-    // int hamming_weight(u32 x)
-    // {
-    //     return __builtin_popcount(x); // GCC/Clang builtin
-    // }
-
-    // int hamming_weight_count(u32 *x, u8 *column, size_t column_size)
-    // {
-    //     int temp{0};
-    //     for (size_t index{0}; index < column_size; ++index)
-    //         temp += __builtin_popcount(x[column[index]]);
-    //     return temp;
-    // }
-
     // Checks the conditions from the Syncopated technique
     u32 SynCondition(u32 *x, u16 (*COND)[2], size_t size, bool keyflag = false)
     {
@@ -730,313 +563,6 @@ namespace OPERATIONS
             return ~temp & ((1 << size) - 1);
         return temp & ((1 << size) - 1);
     }
-
-    // Difference of x and x1 is saved in x
-
-    // void XORStates(u32 *x, u32 *x1 = nullptr, size_t size = WORD_COUNT)
-    // {
-    //     for (size_t i{0}; i < size; ++i)
-    //     {
-    //         x[i] ^= x1[i];
-    //     }
-    // }
-
-    // XOR of the states x and x1 is stored in y
-
-    // u16 DifferenceBit(u32 *x, u16 *ODword, u16 *ODbit, size_t size)
-    // {
-    //     u16 fwdBit{0};
-    //     for (size_t index{0}; index < size; ++index)
-    //         fwdBit ^= get_bit(x[ODword[index]], ODbit[index]);
-    //     return fwdBit;
-    // }
-
-    // u16 DifferenceBit(u32 *x, u16 (*OD)[2], size_t size)
-    // {
-    //     u16 Bit{0};
-    //     for (size_t row{0}; row < size; ++row)
-    //     {
-    //         for (size_t column{0}; column < 2; ++column)
-    //         {
-    //             Bit ^= get_bit(x[OD[row][column]], OD[row][column + 1]);
-    //             column++;
-    //         }
-    //     }
-    //     return Bit;
-    // }
-
-    // u8 DifferenceBit(u32 *x, const std::vector<Distinguisher> &distinguisher, const std::vector<std::vector<u32>> &states)
-    // {
-    //     u8 bit = 0;
-    //     for (const auto &d : distinguisher)
-    //     {
-    //         bit ^= get_bit(states[d.round][d.word], d.bit);
-    //     }
-    //     return bit;
-    // }
-
-    // class CHACHA_SET_BITS_COUNTER
-    // {
-    // public:
-    //     int Funhamming_weight_count(const CONFIGURATION::hamming_weight_counterDetailstrct &params)
-    //     {
-    //         int counter;
-    //         if (params.columnflag) // column
-    //         {
-    //             u8 *col;
-    //             switch (params.columnno)
-    //             {
-    //             case 1:
-    //                 col = ChaCha::column[1];
-    //                 break;
-    //             case 2:
-    //                 col = ChaCha::column[2];
-    //                 break;
-    //             case 3:
-    //                 col = ChaCha::column[3];
-    //                 break;
-    //             default:
-    //                 col = ChaCha::column[0];
-    //                 break;
-    //             }
-    //             counter = hamming_weight_count(params.x, col, 4);
-    //         }
-    //         else // diag
-    //         {
-    //             u8 *diag;
-    //             switch (params.diagno)
-    //             {
-    //             case 1:
-    //                 diag = ChaCha::diag[1];
-    //                 break;
-    //             case 2:
-    //                 diag = ChaCha::diag[2];
-    //                 break;
-    //             case 3:
-    //                 diag = ChaCha::diag[3];
-    //                 break;
-    //             default:
-    //                 diag = ChaCha::diag[0];
-    //                 break;
-    //             }
-    //             counter = hamming_weight_count(params.x, diag, 4);
-    //         }
-    //         return counter;
-    //     }
-    // } chachahamming_weight_counter;
-
-    // class SALSA_SET_BITS_COUNTER
-    // {
-    // public:
-    //     int Funhamming_weight_count(const CONFIGURATION::hamming_weight_counterDetailstrct &params)
-    //     {
-    //         int counter;
-    //         if (params.columnflag) // column
-    //         {
-    //             u16 *col;
-    //             switch (params.columnno)
-    //             {
-    //             case 1:
-    //                 col = Salsa::column[1];
-    //                 break;
-    //             case 2:
-    //                 col = Salsa::column[2];
-    //                 break;
-    //             case 3:
-    //                 col = Salsa::column[3];
-    //                 break;
-    //             default:
-    //                 col = Salsa::column[0];
-    //                 break;
-    //             }
-    // counter = hamming_weight_count(params.x, col, 4);
-    //         }
-    //         else // row
-    //         {
-    //             u16 *row;
-    //             switch (params.rowno)
-    //             {
-    //             case 1:
-    //                 row = Salsa::row[1];
-    //                 break;
-    //             case 2:
-    //                 row = Salsa::row[2];
-    //                 break;
-    //             case 3:
-    //                 row = Salsa::row[3];
-    //                 break;
-    //             default:
-    //                 row = Salsa::row[0];
-    //                 break;
-    //             }
-    //             counter = hamming_weight_count(params.x, row, 4);
-    //         }
-    //         return counter;
-    //     }
-    // } salsahamming_weight_counter;
-
-    // class FORRO_SET_BITS_COUNTER
-    // {
-    // public:
-    //     int Funhamming_weight_count(const CONFIGURATION::hamming_weight_counterDetailstrct &params)
-    //     {
-    //         int counter;
-    //         if (params.columnflag) // column
-    //         {
-    //             u16 *col;
-    //             switch (params.columnno)
-    //             {
-    //             case 1:
-    //                 col = Forro::column[1];
-    //                 break;
-    //             case 2:
-    //                 col = Forro::column[2];
-    //                 break;
-    //             case 3:
-    //                 col = Forro::column[3];
-    //                 break;
-    //             default:
-    //                 col = Forro::column[0];
-    //                 break;
-    //             }
-    //             counter = hamming_weight_count(params.x, col, 4);
-    //         }
-    //         else // diagonal
-    //         {
-    //             u16 *diag;
-    //             switch (params.rowno)
-    //             {
-    //             case 1:
-    //                 diag = Forro::diag[1];
-    //                 break;
-    //             case 2:
-    //                 diag = Forro::diag[2];
-    //                 break;
-    //             case 3:
-    //                 diag = Forro::diag[3];
-    //                 break;
-    //             default:
-    //                 diag = Forro::diag[0];
-    //                 break;
-    //             }
-    //             counter = hamming_weight_count(params.x, diag, 4);
-    //         }
-    //         return counter;
-    //     }
-    // } forrohamming_weight_counter;
-
-    // void PrintBasicDetails(CONFIGURATION::Basic_Config &params,
-    //                        std::ostream &output)
-    // {
-    //     output << "+-----------------------------------------------------------------"
-    //               "+\n";
-    //     if (params.cipher != "")
-    //         output << std::setw(6) << "Cipher Name: " << params.cipher << "\n";
-
-    //     if (params.programtype != "")
-    //         output << std::setw(6) << "Programe Type: " << params.programtype
-    //                << "\n";
-
-    //     if (params.totalround)
-    //     {
-    //         if (params.halfroundflag)
-    //             output << std::setw(6)
-    //                    << "# of total rounds: " << (unsigned)params.totalround + 0.5 << "\n";
-    //         else
-    //         {
-    //             output << std::setw(6)
-    //                    << "# of total rounds: " << (unsigned)params.totalround << "\n";
-    //         }
-    //     }
-
-    //     // output <<
-    //     // "+------------------------------------------------------------------------------------+\n";
-    // }
-    // void PrintDiffDetails(CONFIGURATION::Diff_Config &params,
-    //                       std::ostream &output)
-    // {
-    //     if (params.fwdround)
-    //     {
-    //         if (params.halfroundflag)
-    //         {
-    //             output
-    //                 << std::setw(6)
-    //                 << "# of fwd rounds: " << (unsigned)params.fwdround + 0.5 << "\n";
-    //         }
-    //         else
-    //         {
-    //             output << std::setw(6)
-    //                    << "# of fwd rounds: " << (unsigned)params.fwdround << "\n";
-    //         }
-    //     }
-
-    // if (params.ID)
-    // {
-    //     output << std::setw(6) << "Input Differential: ";
-    //     OPERATIONS::arrayprint.doubleprint(params.ID, params.IDsize, 2, "⊕");
-    // }
-    // if (params.mask)
-    // {
-    //     output << std::setw(6) << "Output Mask: ";
-    //     OPERATIONS::arrayprint.doubleprint(params.mask, params.masksize, 2, "⊕");
-    // }
-    // if (params.precision_digit)
-    //     output << "The degree of precision is upto " << params.precision_digit - 1
-    //            << " digits after decimal\n";
-    // // output <<
-    // "+------------------------------------------------------------------------------------+\n";
-    // }
-
-    // void PrintPNBDetails(CONFIGURATION::PNBvalueDetailstrct &params,
-    //                      std::ostream &output)
-    // {
-    //     if (params.PNBfile != "")
-    //         output << std::setw(6) << "PNBs are from the file " << params.PNBfile
-    //                << "\n";
-    //     if (params.PNBlockflag)
-    //     {
-    //         output << std::setw(6) << "PNBs are in block mode"
-    //                << "\n";
-    //         output << std::setw(6)
-    //                << "# of PNBs in block mode: " << params.PNBinblocksize
-    //                << ", # of rest of the PNBs: " << params.restPNBsize
-    //                << ", # of orphan PNBs: " << params.orphanPNBsize << "\n";
-    //     }
-    //     if (params.PNB)
-    //         output << std::setw(6) << "# of PNBs: " << params.PNBsize << "\n";
-
-    //     if (params.neutralitymeasure)
-    //         output << "The neutrality measure is " << std::fixed << std::setprecision(3) << params.neutralitymeasure
-    //                << "\n";
-    //     // output <<
-    //     // "+------------------------------------------------------------------------------------+\n";
-    // }
-
-    // void PrintSampleDetails(CONFIGURATION::samplesDetailstrct &params,
-    //                         std::ostream &output)
-    // {
-    //     if (params.samplesperLoop)
-    //         output << std::setw(6) << std::fixed << std::setprecision(2) << "Samples Per Loop: 2^{"
-    //                << log2(params.samplesperLoop) << "}\n";
-    //     if (params.totalLoop)
-    //         output << std::setw(6) << std::fixed << std::setprecision(2) << "Total Loop Count: 2^{"
-    //                << log2(params.totalLoop) << "}\n";
-    //     if (params.samplesperThread)
-    //         output << std::setw(6) << std::fixed << std::setprecision(2) << "Samples Per Thread: 2^{"
-    //                << log2(params.samplesperThread) << "}\n";
-    // }
-
-    // void PrintBiasLoopEtc(std::ostream &output)
-    // {
-    //     output << "+----------------------+----------------------------------+---------------------------------+---------------------"
-    //               "+\n";
-    //     output << std::setw(15) << "Loop Count" << std::setw(5) << "            "
-    //            << std::setw(15) << "Bias" << std::setw(13) << "          " << std::setw(33)
-    //            << "Apprx. exec. time (seconds)" << std::setw(3) << ""
-    //            << std::setw(13) << "Remarks" << std::setw(6) << "\n";
-    //     output << "+----------------------+----------------------------------+---------------------------------+---------------------"
-    //               "+\n";
-    // }
 };
 
 namespace OUTPUT
