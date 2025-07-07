@@ -226,17 +226,27 @@ double bwbias()
 
             if (pnb_config.pnb_carrylock_flag)
             {
-                xor_state(sumstate, x0, strdx0);
-                xor_state(dsumstate, dx0, dstrdx0);
-            }
-            else
-            {
-                // modular addition of states
-                add_state_oop(sumstate, x0, strdx0);
-                add_state_oop(dsumstate, dx0, dstrdx0);
-            }
+                seg = bit_segment(sumstate[6], 0, 5);
+                dseg = bit_segment(dsumstate[6], 0, 5);
+                strseg = bit_segment(strdx0[6], 0, 5);
+                dstrseg = bit_segment(dstrdx0[6], 0, 5);
 
-            if (pnb_config.pnb_syncopation_flag)
+                bool z1 =
+                    get_bit(sumstate[6], 6) &&
+                    get_bit(sumstate[6], 7) &&
+                    get_bit(sumstate[6], 8);
+
+                bool z2 =
+                    get_bit(dsumstate[6], 6) &&
+                    get_bit(dsumstate[6], 7) &&
+                    get_bit(dsumstate[6], 8);
+
+                if ((seg >= strseg) && (dseg >= dstrseg) && z1 && z2)
+                {
+                    break;
+                }
+            }
+            else if (pnb_config.pnb_syncopation_flag)
             {
                 condition = get_bit(sumstate[6], 9);
                 dcondition = get_bit(dsumstate[6], 9);
@@ -246,9 +256,7 @@ double bwbias()
                     break;
             }
             else
-            {
                 break;
-            }
         }
 
         // randomise the PNBs
@@ -290,17 +298,9 @@ double bwbias()
             }
         }
 
-        if (pnb_config.pnb_carrylock_flag)
-        {
-            xor_state(minusstate, sumstate, strdx0);
-            xor_state(dminusstate, dsumstate, dstrdx0);
-        }
-        else
-        {
             // modular subtraction of states
             subtract_state_oop(minusstate, sumstate, strdx0);
             subtract_state_oop(dminusstate, dsumstate, dstrdx0);
-        }
        
         // ---------------------------BW ROUND STARTS--------------------------------------------------------------------
         bckward.Half_2_EvenRF(minusstate);
