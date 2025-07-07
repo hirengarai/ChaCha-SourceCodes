@@ -6,25 +6,25 @@
  * created: 24/9/23
  * updated: 29/6/25
  *
- * by Hiren
- * Research Fellow
- * NTU Singapore
+ * 
+ *
  *
  * Synopsis:
  * This file contains the backward bias searching programme for the stream cipher ChaCha.
  * running command: g++ bwbiasthreaded.cpp && ./a.out or g++ -std=c++23 -flto -O3 bwbiasthreaded.cpp -o output && ./output
- * necessary files to run the prog: commonfiles2.h, chacha.h, one txt file containg the PNBs
+ * necessary files to run the prog: commonfiles2.h, chacha.h, one txt file containg the PNBs in block mode without comma and bracket (e.g if {2,3,4,7,21,22} is a 6 pnb set then the .txt file = 2 3 21 4 22 7 3 2 1
+ * the last three elements are the lengths of the three types pnbs)
  */
 
-#include "../../chachaCipher/header/chacha.h" // chacha round functions
+#include "chacha.h"                           // chacha round functions
 #include <cmath>                              // pow function
 #include <ctime>                              // time
 #include <chrono>                             // execution time duration
 #include <fstream>                            // storing output in a file
 #include <future>                             // multithreading
 #include <sstream>
-#include <sys/time.h> // execution time started
-#include <thread>     // multithreading
+#include <sys/time.h>                         // execution time started
+#include <thread>                             // multithreading
 
 using namespace std;
 using namespace CHACHA;
@@ -179,11 +179,10 @@ double bwbias()
 {
     double threadloop{0}, thread_match_count{0};
     u32 x0[WORD_COUNT], strdx0[WORD_COUNT], key[KEY_COUNT], dx0[WORD_COUNT], dstrdx0[WORD_COUNT], DiffState[WORD_COUNT], sumstate[WORD_COUNT], minusstate[WORD_COUNT], dsumstate[WORD_COUNT], dminusstate[WORD_COUNT], condition, dcondition, kcondition, temp;
-    std::vector<u32 *> round_diffstates;
-    u8 fwdBit, bwdBit;
-    u16 WORD, WORD1, BIT, BIT1;
+    u16 fwdBit, bwdBit, WORD, BIT;
 
     const int full_fwd_rounds = diff_config.rounded_round();
+    
     while (threadloop < samples_config.samples_per_thread)
     {
 
