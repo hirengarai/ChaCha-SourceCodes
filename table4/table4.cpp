@@ -10,7 +10,7 @@
  *
  * Synopsis:
  * This file contains the backward bias searching programme for the stream cipher ChaCha.
- * running command: g++ bwbiasthreaded.cpp && ./a.out or g++ -std=c++23 -flto -O3 table.cpp -o output && ./output
+ * running command: g++ bwbiasthreaded.cpp && ./a.out or g++ -std=c++23 -flto -O3 filename -o output && ./output
  * necessary files to run the prog: commonfiles2.h, chacha.h, one txt file containg the PNBs in block mode without comma and bracket (e.g if {2,3,4,7,21,22} is a 6 pnb set then the .txt file = 2 3 21 4 22 7 3 2 1
  * the last three elements are the lengths of the three types pnbs)
  */
