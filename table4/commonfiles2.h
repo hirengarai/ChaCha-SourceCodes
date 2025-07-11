@@ -1,5 +1,5 @@
 /*
- * REFERENCE IMPLEMENTATION OF some common functions that is used in Salsa, ChaCha
+ * REFERENCE IMPLEMENTATION OF some common functions that is used in Salsa, ChaCha & Forrò cipher
  *
  * Filename: commonfiles2.h
  *
@@ -8,7 +8,7 @@
  *
  *
  * Synopsis:
- * This file contains some common functions that is used in Salsa, ChaCha
+ * This file contains some common functions that is used in Salsa, ChaCha and Forro scheme
  */
 #include <algorithm> // sorting purpose
 #include <bitset>    // binary representation
@@ -22,11 +22,9 @@
 #include <random>    // mt19937
 #include <string>    // filename
 #include <sstream>
-#include <vector>    // vector
+#include <vector> // vector
 
 // == -- -- -- -- -- -- -- -- -- -- ---= =
-
-
 using ull = unsigned long long; // 32 - 64 bits memory
 
 using u8 = std::uint8_t;        // positive integer of 8 bits
@@ -199,11 +197,6 @@ namespace CHACHA
         {
             for (size_t index{CHACHA_IV_START}; index <= CHACHA_IV_END; ++index)
                 x[index] = GenerateRandom32Bits(); // IV
-
-            // x[12] = GenerateRandom32Bits();
-            // x[13] = GenerateRandom32Bits();
-            // x[14] = GenerateRandom32Bits();
-            // x[15] = GenerateRandom32Bits();
         }
         else
         {
@@ -224,49 +217,6 @@ namespace CHACHA
     }
 } // namespace ChaCha
 
-namespace SALSA
-{
-    u16 column[4][4] = {
-        {0, 4, 8, 12}, {5, 9, 13, 1}, {10, 14, 2, 6}, {15, 3, 7, 11}};
-    u16 row[4][4] = {{0, 1, 2, 3}, {5, 6, 7, 4}, {10, 11, 8, 9}, {15, 12, 13, 14}};
-    void init_iv_const(u32 *x, bool randflag = true, u32 value = 0)
-    {
-        x[0] = 0x61707865;
-        x[5] = 0x3120646e;
-        x[10] = 0x79622d36;
-        x[15] = 0x6b206574;
-        if (randflag)
-        {
-            for (size_t index{SALSA_IV_START}; index <= SALSA_IV_END; ++index)
-                x[index] = GenerateRandom32Bits(); // IV
-        }
-        else
-        {
-            for (size_t index{SALSA_IV_START}; index <= SALSA_IV_END; ++index)
-                x[index] = value;
-        }
-    }
-    void insertkey(u32 *x, u32 *k)
-    {
-        for (size_t index{1}; index <= 4; ++index)
-            x[index] = k[index - 1];
-        for (size_t index{11}; index <= 14; ++index)
-            x[index] = k[index - 7];
-    }
-    // calculates the position of the index in the state matrix
-    void calculate_word_bit(u16 index, u16 &WORD, u16 &BIT)
-    {
-        if ((index / WORD_SIZE) > 3)
-        {
-            WORD = (index / WORD_SIZE) + 7;
-        }
-        else
-        {
-            WORD = (index / WORD_SIZE) + 1;
-        }
-    }
-}
-// namespace Salsa
 
 namespace OPERATIONS
 {
@@ -507,16 +457,7 @@ namespace OPERATIONS
             x1[index] = __builtin_popcount(x[index]);
     }
 
-    // Checks the conditions from the Syncopated technique
-    u32 SynCondition(u32 *x, u16 (*COND)[2], size_t size, bool keyflag = false)
-    {
-        u32 temp{0};
-        for (size_t j{0}; j < size; ++j)
-            temp += ((get_bit(x[COND[j][0]], COND[j][1])) << j);
-        if (keyflag)
-            return ~temp & ((1 << size) - 1);
-        return temp & ((1 << size) - 1);
-    }
+};
 
 namespace OUTPUT
 {
@@ -679,9 +620,6 @@ namespace OUTPUT
         if (cfg.halfround_flag)
             output << "| Half-Round Flag:   ✅\n";
 
-        // if (cfg.precision_digit)
-        //     output << "| Precision Digits:  " << static_cast<int>(cfg.precision_digit) << "\n";
-
         if (cfg.chosenIV_flag)
             output << "| Chosen IV Mode:    ✅\n";
 
@@ -752,9 +690,6 @@ namespace OUTPUT
             output << "| PNB File:                    " << cfg.pnb_file << "\n";
             output << "| #PNBs:                       " << cfg.pnbs.size() << "\n";
         }
-        // // PNB file name if available
-        // if (!cfg.pnb_file.empty())
-        //     output << "| PNB File:                " << cfg.pnb_file << "\n";
 
         if (cfg.potential_pnb_count)
             output << "| Potential PNB Count:      "
