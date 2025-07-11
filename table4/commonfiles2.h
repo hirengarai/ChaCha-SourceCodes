@@ -1,10 +1,10 @@
 /*
- * REFERENCE IMPLEMENTATION OF some common functions that is used in Salsa, ChaCha 
+ * REFERENCE IMPLEMENTATION OF some common functions that is used in Salsa, ChaCha
  *
  * Filename: commonfiles2.h
  *
  * created: 23/9/23
- * updated: 29/6/25
+ * updated: 11/7/25
  *
  *
  * Synopsis:
@@ -22,7 +22,7 @@
 #include <random>    // mt19937
 #include <string>    // filename
 #include <sstream>
-#include <vector> // vector
+#include <vector>    // vector
 
 // == -- -- -- -- -- -- -- -- -- -- ---= =
 
@@ -30,11 +30,10 @@
 using ull = unsigned long long; // 32 - 64 bits memory
 
 using u8 = std::uint8_t;        // positive integer of 8 bits
-using u16 = std::uint16_t; // positive integer of 16 bits
-using u32 = std::uint32_t; // positive integer of 32 bits
+using u16 = std::uint_fast16_t; // positive integer of 16 bits
+using u32 = std::uint_fast32_t; // positive integer of 32 bits
 using u64 = std::uint64_t;      // positive integer of 64 bits
 
-// constexpr size_t WORD_SIZE = word_bit_width<u32>();
 constexpr size_t WORD_SIZE = 32;
 constexpr u32 MOD = UINT32_MAX; // Maximum 32-bit unsigned integer (2^32 - 1)
 
@@ -55,10 +54,11 @@ constexpr size_t FORRO_KEY_END = 11;
 
 #define get_bit(word, bit) (((word) >> (bit)) & 0x1)
 #define set_bit(word, bit) ((word) |= (1u << (bit)))
-#define clear_bit(word, bit) ((word) &= ~(1u << (bit)))
+#define unset_bit(word, bit) ((word) &= ~(1u << (bit)))
 #define toggle_bit(word, bit) ((word) ^= (1u << (bit)))
 
 #define ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (sizeof(x) * 8 - (n))))
+#define ROTATE_RIGHT(x, n) (((x) >> (n)) | ((x) << (sizeof(x) * 8 - (n))))
 
 inline thread_local std::mt19937 gen{std::random_device{}()};
 
@@ -143,6 +143,7 @@ namespace CONFIGURATION
     {
         std::string pnb_file;
         double neutrality_measure = -1.0;
+        bool pnb_search_flag = true;
         bool pnb_pattern_flag = true;
         bool pnb_carrylock_flag = false;
         bool pnb_syncopation_flag = false;
@@ -253,67 +254,19 @@ namespace SALSA
             x[index] = k[index - 7];
     }
     // calculates the position of the index in the state matrix
-    void calculateWORDandBIT(int index, u16 &WORD, u16 &BIT)
+    void calculate_word_bit(u16 index, u16 &WORD, u16 &BIT)
     {
-        if ((index / 32) > 3)
+        if ((index / WORD_SIZE) > 3)
         {
-            WORD = (index / 32) + 7;
+            WORD = (index / WORD_SIZE) + 7;
         }
         else
         {
-            WORD = (index / 32) + 1;
+            WORD = (index / WORD_SIZE) + 1;
         }
     }
 }
 // namespace Salsa
-
-namespace FORRO
-{
-    u16 column[4][5] = {
-        {0, 4, 8, 12, 3}, {1, 5, 9, 13, 0}, {2, 6, 10, 14, 1}, {3, 7, 11, 15, 2}};
-    u16 diag[4][5] = {{0, 5, 10, 15, 3}, {1, 6, 11, 12, 0}, {2, 7, 8, 13, 1}, {3, 4, 9, 14, 2}};
-    void init_iv_const(u32 *x, bool randflag = true, u32 value = 0)
-    {
-        x[6] = 0x746C6F76;
-        x[7] = 0x61616461;
-        x[14] = 0x72626173;
-        x[15] = 0x61636E61;
-        if (randflag)
-        {
-            x[4] = GenerateRandom32Bits();
-            x[5] = GenerateRandom32Bits();
-            x[12] = GenerateRandom32Bits();
-            x[13] = GenerateRandom32Bits();
-        }
-        else
-        {
-            x[4] = value;
-            x[5] = value;
-            x[12] = value;
-            x[13] = value;
-        }
-    }
-    void insertkey(u32 *x, u32 *k)
-    {
-        for (size_t index{0}; index <= 3; ++index)
-            x[index] = k[index];
-        for (size_t index{8}; index <= 11; ++index)
-            x[index] = k[index - 4];
-    }
-    void calculateWORDandBIT(int index, u16 &WORD, u16 &BIT)
-    {
-        if (index > 127)
-        {
-            WORD = (index / WORD_SIZE) + 4;
-            BIT = index % WORD_SIZE;
-        }
-        else
-        {
-            WORD = (index / WORD_SIZE);
-            BIT = index % WORD_SIZE;
-        }
-    }
-} // namespace Forro
 
 namespace OPERATIONS
 {
@@ -326,7 +279,6 @@ namespace OPERATIONS
             {
                 for (size_t index{0}; index < KEY_COUNT; ++index)
                     k[index] = GenerateRandom32Bits();
-    
             }
             else
             {
@@ -369,8 +321,9 @@ namespace OPERATIONS
 
     u32 bit_segment(u32 source, int start, int end)
     {
-        u32 mask = ((1u << (end - start + 1)) - 1) << start;
-        return source & mask;
+        int width = end - start + 1;
+        u32 mask = (1U << width) - 1;
+        return (source >> start) & mask;
     }
 
     std::string to_512bit_hex_string(u32 *x)
@@ -403,11 +356,11 @@ namespace OPERATIONS
         }
     };
 
-    // xor of x and x1 is stored in y
-    void xor_state(u32 *y, u32 *x, u32 *x1 = nullptr, size_t word_count = WORD_COUNT)
+    // xor of word wise x and x1 is stored in z starting from start to end
+    void xor_state_oop(u32 *z, u32 *x, u32 *x1 = nullptr, size_t start = 0, size_t end = WORD_COUNT)
     {
-        for (size_t i{0}; i < word_count; ++i)
-            y[i] = x[i] ^ x1[i];
+        for (size_t i{start}; i < end; ++i)
+            z[i] = x[i] ^ x1[i];
     }
     // sum of x and x1 is stored in x
     void add_state(u32 *x, u32 *x1, size_t size = WORD_COUNT)
@@ -415,10 +368,10 @@ namespace OPERATIONS
         for (size_t i{0}; i < size; ++i)
             x[i] += x1[i];
     }
-    // sum of x and x1 is stored in z
-    void add_state_oop(u32 *z, u32 *x, u32 *x1, size_t size = WORD_COUNT)
+    // sum of word wise x and x1 is stored in z starting from start to end
+    void add_state_oop(u32 *z, u32 *x, u32 *x1, size_t start = 0, size_t end = WORD_COUNT)
     {
-        for (size_t i{0}; i < size; ++i)
+        for (size_t i{start}; i < end; ++i)
             z[i] = x[i] + x1[i];
     }
     // subtraction of x1 from x is stored in x
@@ -427,10 +380,10 @@ namespace OPERATIONS
         for (size_t i{0}; i < word_count; ++i)
             x[i] -= x1[i];
     }
-    // subtraction of x1 from x is stored in z
-    void subtract_state_oop(u32 *z, u32 *x, u32 *x1, size_t word_count = WORD_COUNT)
+    // sum of word wise x and x1 is stored in z starting from start to end
+    void subtract_state_oop(u32 *z, u32 *x, u32 *x1, size_t start = 0, size_t end = WORD_COUNT)
     {
-        for (size_t i{0}; i < word_count; ++i)
+        for (size_t i{start}; i < end; ++i)
             z[i] = x[i] - x1[i];
     }
 
@@ -493,6 +446,7 @@ namespace OPERATIONS
         }
     }
 
+    // calculates the number of set bits in the word x
     inline int hamming_weight(u32 x)
     {
         return __builtin_popcount(x); // Efficient on GCC/Clang
@@ -563,7 +517,6 @@ namespace OPERATIONS
             return ~temp & ((1 << size) - 1);
         return temp & ((1 << size) - 1);
     }
-};
 
 namespace OUTPUT
 {
@@ -693,7 +646,7 @@ namespace OUTPUT
                << center(std::to_string(prob).substr(0, 9), 13) << "|"
                << center(valueWithPower(bias), 24) << "|"
                << center(valueWithPower(fabs(corr)), 24) << "|"
-               << center(std::to_string(exec_time).substr(0, 6) + "s", 12) << "|"
+               << center(std::to_string(exec_time).substr(0, 6) + "ms", 12) << "|"
                << center(remark, 13) << "|\n";
     }
 
@@ -808,10 +761,13 @@ namespace OUTPUT
                    << (cfg.potential_pnb_count) << "\n";
 
         // Pattern flag
-        output << "| Pattern Flag:                " << (cfg.pnb_pattern_flag ? "True" : "False") << "\n";
-        output << "| Syncopation Flag:            " << (cfg.pnb_syncopation_flag ? "True" : "False") << "\n";
-        output << "| Carrylock Flag:              " << (cfg.pnb_carrylock_flag ? "True" : "False") << "\n";
-        output << "+--------------------------------------+\n";
+        if (!cfg.pnb_search_flag)
+        {
+            output << "| Pattern Flag:                " << (cfg.pnb_pattern_flag ? "True" : "False") << "\n";
+            output << "| Syncopation Flag:            " << (cfg.pnb_syncopation_flag ? "True" : "False") << "\n";
+            output << "| Carrylock Flag:              " << (cfg.pnb_carrylock_flag ? "True" : "False") << "\n";
+            output << "+--------------------------------------+\n";
+        }
     }
 
     void print_state(const CONFIGURATION::Print_State_Config &cfg, std::ostream &os = std::cout)
@@ -855,6 +811,23 @@ namespace OUTPUT
             << " at " << std::setfill('0') << std::setw(2) << lt->tm_hour << ':'
             << std::setw(2) << lt->tm_min << ':' << std::setw(2) << lt->tm_sec
             << " ########\n";
+        return oss.str();
+    }
+
+    // prints in 4-bit block version
+    std::string print_binary_in_nibbles(u32 value)
+    {
+        std::bitset<WORD_SIZE> bits(value);
+        std::string binary = bits.to_string();
+        std::ostringstream oss;
+
+        for (size_t i = 0; i < WORD_SIZE; i += 4)
+        {
+            oss << binary.substr(i, 4);
+            if (i < 28)
+                oss << " ";
+        }
+
         return oss.str();
     }
 }
@@ -905,7 +878,7 @@ public:
     }
 } timer;
 
-bool OpenPNBFile(const std::string &filename, CONFIGURATION::PNB_Config &details)
+bool OpenPNBFile(const std::string &filename, CONFIGURATION::PNB_Config &cfg)
 {
     std::ifstream file(filename);
     if (!file.is_open())
@@ -923,71 +896,47 @@ bool OpenPNBFile(const std::string &filename, CONFIGURATION::PNB_Config &details
             std::cerr << "⚠ Invalid value in file: " << temp << "\n";
             return false;
         }
-        data.push_back(static_cast<u8>(temp));
+        data.push_back(temp);
     }
     file.close();
 
-    if (data.empty())
+    if (data.size() < 3)
     {
-        std::cerr << "⚠ PNB file is empty.\n";
+        std::cerr << "⚠ PNB file too short to read 3-size footer.\n";
         return false;
     }
 
-    if (details.pnb_pattern_flag)
+    // Read footer counts
+    size_t m1 = data[data.size() - 3];
+    size_t m2 = data[data.size() - 2];
+    size_t m3 = data[data.size() - 1];
+    size_t count = m1 + m2 + m3;
+
+    // Remove footer
+    data.resize(data.size() - 3);
+
+    if (data.size() < count)
     {
-        if (data.size() < 3)
-        {
-            std::cerr << "⚠ Invalid PNB file: missing m1, m2, m3\n";
-            return false;
-        }
+        std::cerr << "⚠ Size mismatch: expected at least " << count
+                  << " PNBs, but got only " << data.size() << ".\n";
+        return false;
+    }
 
-        size_t m1 = data[data.size() - 3];
-        size_t m2 = data[data.size() - 2];
-        size_t m3 = data[data.size() - 1];
+    // Always assign pnbs
+    cfg.pnbs.assign(data.begin(), data.begin() + count);
 
-        size_t total = m1 + m2 + m3;
-        if (data.size() - 3 < total)
-        {
-            std::cerr << "⚠ PNB file too short for given sizes.\n";
-            return false;
-        }
-
-        // Assign to config
-        details.pnbs.assign(data.begin(), data.begin() + total);
-        details.pnbs_in_pattern.assign(data.begin(), data.begin() + m1);
-        details.pnbs_in_border.assign(data.begin() + m1, data.begin() + m1 + m2);
-        details.rest_pnbs.assign(data.begin() + m1 + m2, data.begin() + total);
+    // Now conditionally split further
+    if (cfg.pnb_pattern_flag)
+    {
+        cfg.pnbs_in_pattern.assign(data.begin(), data.begin() + m1);
+        cfg.pnbs_in_border.assign(data.begin() + m1, data.begin() + m1 + m2);
+        cfg.rest_pnbs.assign(data.begin() + m1 + m2, data.begin() + count);
     }
     else
     {
-        if (data.size() < 3)
-        {
-            std::cerr << "⚠ PNB file too short to read 3-size footer.\n";
-            return false;
-        }
-
-        // Get last 3 values as counts
-        size_t m1 = data[data.size() - 3];
-        size_t m2 = data[data.size() - 2];
-        size_t m3 = data[data.size() - 1];
-        size_t count = m1 + m2 + m3;
-
-        // Remove last 3 entries
-        data.resize(data.size() - 3);
-
-        if (data.size() < count)
-        {
-            std::cerr << "⚠ Size mismatch: expected at least " << count
-                      << " PNBs, but got only " << data.size() << ".\n";
-            return false;
-        }
-
-        // Take the first 'count' values as PNBs
-        details.pnbs.assign(data.begin(), data.begin() + count);
-        details.rest_pnbs.clear();       // Treat all as "rest"
-        details.pnbs_in_pattern.clear(); // No pattern
-        details.pnbs_in_border.clear();  // No border
+        cfg.pnbs_in_pattern.clear();
+        cfg.pnbs_in_border.clear();
+        cfg.rest_pnbs.clear(); // all in pnbs
     }
-
     return true;
 }
