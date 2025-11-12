@@ -24,8 +24,8 @@ This source code also includes comparative implementations of:
 ## Repository Structure
 
 
-- `biascheck.cpp` — Source codes for bias measurement
-Change the flag inside for different approaches.   
+- `biascheck.cpp` — Source codes for bias measurement. 
+Change the flag inside for different approaches. Change the key size for different versions.   
 
 ---
 
