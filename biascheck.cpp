@@ -53,8 +53,8 @@ int main()
     diff_config.output_precision = 4;
 
     // ===-------------------------------------------------------------------===
-    pnb_config.pnb_file = "key2block1.txt";
-    pnb_config.pnb_pattern_flag = false;
+    pnb_config.pnb_file = "chacha7.5_pnbs/key3single1.txt";
+    pnb_config.pnb_pattern_flag = true;
     pnb_config.pnb_carrylock_flag = false;
     pnb_config.pnb_syncopation_flag = false;
     // ===-------------------------------------------------------------------===
