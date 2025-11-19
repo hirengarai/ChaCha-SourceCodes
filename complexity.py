@@ -40,7 +40,7 @@ def compute_stage_N(alpha, fwd_eps, bwd_eps, constant=None):
         constant = NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
 
     epsilon = fwd_eps * bwd_eps
-    print(f"The product bias:~2^{{{math.log2(epsilon):.2f}}}.")
+    print(f"The product of fwd and bwd biases:~2^{{{math.log2(epsilon):.2f}}}.")
     one_minus_eps_sq = 1.0 - (epsilon * epsilon)
     numerator = math.sqrt(alpha * math.log(4.0)) - constant * math.sqrt(one_minus_eps_sq)
     N = (numerator / epsilon) ** 2
@@ -64,34 +64,35 @@ def compute_C(m_list, N, dim_g_new, R, r, key_size, alpha):
     term3 = 2 ** (key_size - alpha)
     term4 = 2 ** (key_size - dim_g_new)
 
-    print(f"\nTerm1:~ 2^{{{math.log2(term1):.2f}}}.")
+    print(f"\nTerm1:~2^{{{math.log2(term1):.2f}}}.")
     print(f"Term2:~2^{{{math.log2(term2):.2f}}}.")
     print(f"Term3:~2^{{{key_size - alpha:.2f}}}.")
     print(f"Term4:~2^{{{key_size - dim_g_new:.2f}}}.")
 
     C = term1 + term2 + term3 + term4
-    print(f"\nComplexity:~2^{{{math.log2(C):.2f}}}.\n")
+    print(f"\nFinal time complexity:~2^{{{math.log2(C):.2f}}}.\n")
     return C
 
 
 # ----------------------------- Example run -----------------------------
 if __name__ == "__main__":
-    key_size = 128
-    dim_g_new = 106
+    key_size = 256
+    dim_g_new = 226
     constant = 0.8
-    alpha = 1.25
+    alpha = 12.5
+    
     # m_list = [80, 86, 95] # <--- for chacha7/128
+    # bwd_biases = [0.46, 0.48, 0.63, 0.46, 0.78, 0.49, 0.45, 0.47, 0.84] # <--- for chacha7/128
+    
     m_list = [212, 207, 211] # <--- for chacha7.5/256
-    R, r = 7, 4
-    fwd_eps = 0.00317
-    bwd_biases = [0.46, 0.48, 0.63, 0.46, 0.78, 0.49, 0.45, 0.47, 0.84]
-    
-    # bwd_biases = [0.68, 0.72, 0.78, 0.63, 0.62, 0.62, 0.67, 0.84, 0.81, 0.78, 0.72, 0.97, 0.85] # <--- for chacha7/128
-    
     bwd_biases = [0.68, 0.72, 0.78, 0.63, 0.62, 0.62, 0.67, 0.84, 0.81, 0.78, 0.72, 0.97, 0.85] # <---- for chacha7.5/256
-
+    
+    R, r = 7.5, 4
+    fwd_eps = 0.00317
+    
+    
     bwd_eps = bias_product(bwd_biases)
-    print(f"The backward bias:{bwd_eps:.5f}~2^{{{math.log2(bwd_eps):.2f}}}.")
+    print(f"The backward of bwd bias(es):{bwd_eps:.5f}~2^{{{math.log2(bwd_eps):.2f}}}.")
     
     N = compute_stage_N(alpha, fwd_eps, bwd_eps, constant)
     print(f"The init. data complexity:~2^{{{math.log2(N):.2f}}}.")
