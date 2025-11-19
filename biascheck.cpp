@@ -3,14 +3,14 @@
  *
  *
  * created: 24/09/23
- * updated: 12/11/25
+ * updated: 19/11/25
  *
  *
  * Synopsis:
  * This file contains the various types of backward bias searching programme for the stream cipher ChaCha.
  * running command: g++ filename && ./a.out or g++ -std=c++23 -flto -O3 filename -o output && ./output
- * necessary files to run the prog: upchacha.hpp, upcommonfiles2.hpp, one txt file containg the PNBs in block mode (e.g if {2,3,4,7,21,22} is a 6 pnb set then the .txt file should have it like 2, 3, 21, 4, 22, 7, 3, 2, 1
- * the last three elements are the length of the portions (it is for pattern purpose).
+ * necessary files to run the prog: chacha.hpp, commonfiles.hpp, one txt file containg the PNBs in block mode (e.g if {2,3,4,7,21,22} is a 6 pnb set then the .txt file should have it like 2, 3, 21, 4, 22, 7, 3, 2, 1
+ * the last three elements are the length of the portions (it is for the pattern purpose).
  */
 
 #include "header/chacha.hpp" // chacha round functions
@@ -38,24 +38,23 @@ int main()
     cout << timer.start_message();
 
     basic_config.name = "ChaCha";
-    basic_config.key_bits = 256;
+    basic_config.key_bits = 128;
     basic_config.mode = "Backward Bias Check";
-    basic_config.total_rounds = 7.5;
+    basic_config.total_rounds = 7;
 
     diff_config.fwd_rounds = 4;
-    diff_config.id = {{13, 6}};
+    
+    diff_config.id = {{13, 6}}; // first component is the word and the other is the bit
     diff_config.mask = {{2, 0}, {8, 0}, {7, 7}};
 
     samples_config.samples_per_thread = 1ULL << 20;
-    samples_config.samples_per_loop = samples_config.samples_per_thread * samples_config.max_num_threads;
+    samples_config.samples_per_loop = samples_config.samples_per_thread * samples_config.max_num_threads; // by default it will take one less core than all the presented core in your system
     samples_config.total_loop_count = 1ULL << 15;
 
-    diff_config.output_precision = 4;
-
     // ===-------------------------------------------------------------------===
-    pnb_config.pnb_file = "chacha7.5_pnbs/key3single1.txt";
+    pnb_config.pnb_file = "chacha7_pnbs/key2single2.txt";
     pnb_config.pnb_pattern_flag = true;
-    pnb_config.pnb_carrylock_flag = false;
+    pnb_config.pnb_carrylock_flag = true;
     pnb_config.pnb_syncopation_flag = false;
     // ===-------------------------------------------------------------------===
 
@@ -72,12 +71,8 @@ int main()
     display::showSamplesConfig(samples_config, cout);
     chacha::showPNBconfig(pnb_config, cout);
 
-    // ---------------------------FILE CREATION------------------------------------------------------------------------------
-    bool file_save_flag = false;
-    // ---------------------------FILE CREATION------------------------------------------------------------------------------
-
     // thread portion started
-    cout << basic_config.mode << " Started . . . (>>> Launching multi-threaded scenario . . .) \n";
+    cout << basic_config.mode << " started . . . (>>> in multi-threaded scenario . . .) \n";
     cout << "+--------------------------------------------------------------------------------------------------------------------------------+\n";
 
     display::printBiasHeader(cout);
@@ -85,10 +80,8 @@ int main()
     vector<future<double>> future_results;
     future_results.reserve(samples_config.max_num_threads);
 
-    const u16 continuitycount{1000};
-    u16 apprxbiascounter{0}, apprxbiasindex{0};
-    double apprxbiaslist[continuitycount], loop{0}, SUM{0}, prob, correlation, prev_correlation{0}, precisionlimit = pow(10, -diff_config.output_precision);
-    bool closeflag = false;
+    double loop{0}, SUM{0}, prob, correlation;
+
     while (loop < samples_config.total_loop_count)
     {
         auto loopstart = chrono::high_resolution_clock::now();
@@ -101,31 +94,12 @@ int main()
 
         prob = SUM / (++loop * (samples_config.samples_per_loop));
         correlation = 2 * prob - 1.0;
-
-        closeflag = false;
-        if (loop > 1 && fabs(correlation - prev_correlation) <= precisionlimit)
-        {
-            apprxbiaslist[apprxbiascounter] = correlation;
-            apprxbiascounter++;
-            closeflag = true;
-        }
-        else
-        {
-            apprxbiascounter = 0; // reset on discontinuity
-            closeflag = false;
-        }
-
-        prev_correlation = correlation; // update for next iteration
         auto loopend = chrono::high_resolution_clock::now();
 
         stringstream row;
-        auto dur_mil = chrono::duration_cast<chrono::milliseconds>(loopend - loopstart).count();
-        auto dur_seconds = chrono::duration_cast<chrono::seconds>(loopend - loopstart).count();
-            display::outputBias(loop, prob, prob - 0.5, correlation, dur_mil, closeflag, apprxbiascounter, cout);
+        auto dur_milliseconds = chrono::duration_cast<chrono::milliseconds>(loopend - loopstart).count();
+        display::outputBias(loop, prob, prob - 0.5, correlation, dur_milliseconds, cout);
     }
-
-    if (loop == samples_config.total_loop_count)
-        cout << "Bias does not converge \n";
 
     cout << timer.end_message();
     return 0;
@@ -140,7 +114,7 @@ double bwbias()
     u16 fwd_parity, bwd_parity, WORD, BIT;
 
     const int rounded_total_rounds = basic_config.roundedTotalRounds();
-    const int rounded_fwd_rounds = diff_config.roundedFwdRounds();
+    const int rounded_fwd_rounds = diff_config.roundedFwdRounds(); // fwd round is basically the round number of the distinguisher
     const bool rounded_total_rounds_odd = (rounded_total_rounds % 2 != 0);
     const bool rounded_fwd_rounds_odd = (rounded_fwd_rounds % 2 != 0);
     const bool has_half = diff_config.fwdRoundsAreFractional();
@@ -235,53 +209,11 @@ double bwbias()
 
             if (pnb_config.pnb_carrylock_flag)
             {
-
-                // u16 w, bstart, bend;
-
-                // u32 mask = 0;
-                // size_t n = pnb_config.pnbs.size();
-
-                // if (n >= 32)
-                //     mask = 0xFFFFFFFF;
-                // else
-                //     mask = (1u << n) - 1;
-
-                // w = pnb_config.pnbs.front() / WORD_SIZE + 4;
-                // bstart = pnb_config.pnbs.at(0) % WORD_SIZE;
-                // bend = pnb_config.pnbs.back() % WORD_SIZE;
-
-                // // bool bit1 = GET_BIT(sumstate[w], b);
-                // // bool bit2 = GET_BIT(dsumstate[w], b);
-
-                // // bool sbit1 = GET_BIT(sumstate[w + 4], b);
-                // // bool sbit2 = GET_BIT(dsumstate[w + 4], b);
-
-                // u32 pnbseg = ops::bitSegment(sumstate[w], bstart, bend);
-                // u32 dpnbseg = ops::bitSegment(dsumstate[w], bstart, bend);
-
-                // u32 seg = ops::bitSegment(sumstate[w], 0, bstart - 1);
-                // u32 dseg = ops::bitSegment(dsumstate[w], 0, bstart - 1);
-
-                // u32 strseg = ops::bitSegment(strdx0[w], 0, bstart - 1);
-                // u32 dstrseg = ops::bitSegment(dstrdx0[w], 0, bstart - 1);
-
-                // // u32 sseg = ops::bitSegment(sumstate[w + 4], 0, b - 1);
-                // // u32 dsseg = ops::bitSegment(dsumstate[w + 4], 0, b - 1);
-
-                // // u32 sstrseg = ops::bitSegment(strdx0[w + 4], 0, b - 1);
-                // // u32 dsstrseg = ops::bitSegment(dstrdx0[w + 4], 0, b - 1);
-
-                // bool w1 = (seg >= strseg) && (dseg >= dstrseg);
-
-                // bool w2 = (pnbseg == mask && dpnbseg == mask);
-
-                // if (w1 && w2)
-
-
                 ops::xorState(sumstate, x0, strdx0);
                 ops::xorState(dsumstate, dx0, dstrdx0);
                 break;
             }
+            // for syncopation you have to change the conditions accordingly
             else if (pnb_config.pnb_syncopation_flag)
             {
                 u16 zcond = GET_BIT(sumstate[6], 9); 

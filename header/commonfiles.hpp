@@ -554,7 +554,7 @@ namespace display
     constexpr int WIDTH_NM = 10;
     constexpr int WIDTH_TIME = 12;
     constexpr int WIDTH_LOOP = 12;
-    constexpr int WIDTH_PROB = 28;
+    constexpr int WIDTH_PROB = 23;
     constexpr int WIDTH_BIAS = 23;
     constexpr int WIDTH_CORR = 23;
     constexpr int WIDTH_REM = 14;
@@ -680,8 +680,7 @@ namespace display
             << std::string(WIDTH_PROB, '-') << "+"
             << std::string(WIDTH_BIAS, '-') << "+"
             << std::string(WIDTH_CORR, '-') << "+"
-            << std::string(WIDTH_TIME, '-') << "+"
-            << std::string(WIDTH_REM, '-') << "+\n";
+            << std::string(WIDTH_TIME, '-') << "+\n";
     }
 
     inline void printPNBborder(std::ostream &out)
@@ -703,8 +702,7 @@ namespace display
             << center("Probability", WIDTH_PROB) << "|"
             << center("Bias", WIDTH_BIAS) << "|"
             << center("Correlation", WIDTH_CORR) << "|"
-            << center("Exec. Time", WIDTH_TIME) << "|"
-            << center("Remark", WIDTH_REM) << "|\n";
+            << center("Exec. Time", WIDTH_TIME) << "|\n";
         printBiasBorder(out);
     }
 
@@ -724,21 +722,21 @@ namespace display
     // ------------------------------------------------------
     // Rows
     // ------------------------------------------------------
-    inline void outputBias(int loop, double prob, double bias, double corr,
-                           int duration_ms, bool remark_flag, int remark_count,
+    inline void outputBias(u64 loop, double prob, double bias, double corr,
+                           int duration_ms,
                            std::ostream &out, bool hide_bias_corr = false)
     {
-        const std::string remark = remark_flag ? "✓ (" + std::to_string(remark_count) + ")" : "x";
+        // const std::string remark = remark_flag ? "✓ (" + std::to_string(remark_count) + ")" : "x";
         const std::string time_str = fmtDurationMS(duration_ms);
 
         out << "|"
             << center(std::to_string(loop), WIDTH_LOOP) << "|"
-            << center(fmtValueAsPower2(prob, 10), WIDTH_PROB) << "|";
+            << center(fmtValueAsPower2(prob), WIDTH_PROB) << "|";
 
         if (!hide_bias_corr)
         {
-            out << center(fmtValueAsPower2(std::fabs(bias)), WIDTH_BIAS) << "|"
-                << center(fmtValueAsPower2(std::fabs(corr)), WIDTH_CORR) << "|";
+            out << center(fmtValueAsPower2((bias)), WIDTH_BIAS) << "|"
+                << center(fmtValueAsPower2((corr)), WIDTH_CORR) << "|";
         }
         else
         {
@@ -746,8 +744,7 @@ namespace display
                 << center("-", WIDTH_CORR) << "|";
         }
 
-        out << center(time_str, WIDTH_TIME) << "|"
-            << center(remark, WIDTH_REM) << "|\n";
+        out << center(time_str, WIDTH_TIME) << "|\n";
     }
 
     void showBasicConfig(const config::CipherInfo &cfg, std::ostream &output)

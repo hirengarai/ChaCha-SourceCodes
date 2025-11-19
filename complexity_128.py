@@ -76,23 +76,19 @@ def compute_C(m_list, N, dim_g_new, R, r, key_size, alpha):
 
 # ----------------------------- Example run -----------------------------
 if __name__ == "__main__":
-    key_size = 256
-    dim_g_new = 226
+    key_size = 128
+    dim_g_new = 106
     constant = 0.8
-    alpha = 12.5
+    alpha = 1.25
     
-    # m_list = [80, 86, 95] # <--- for chacha7/128
-    # bwd_biases = [0.46, 0.48, 0.63, 0.46, 0.78, 0.49, 0.45, 0.47, 0.84] # <--- for chacha7/128
+    m_list = [80, 86, 95] # <--- for chacha7/128
+    bwd_biases = [0.46, 0.48, 0.63, 0.46, 0.78, 0.62, 0.45, 0.47, 0.84] # <--- for chacha7/128
     
-    m_list = [212, 207, 211] # <--- for chacha7.5/256
-    bwd_biases = [0.68, 0.72, 0.78, 0.63, 0.62, 0.62, 0.67, 0.84, 0.81, 0.78, 0.72, 0.97, 0.85] # <---- for chacha7.5/256
-    
-    R, r = 7.5, 4
+    R, r = 7, 4
     fwd_eps = 0.00317
     
-    
     bwd_eps = bias_product(bwd_biases)
-    print(f"The backward of bwd bias(es):{bwd_eps:.5f}~2^{{{math.log2(bwd_eps):.2f}}}.")
+    print(f"The product of bwd bias(es):{bwd_eps:.5f} ~ 2^{{{math.log2(bwd_eps):.2f}}}.")
     
     N = compute_stage_N(alpha, fwd_eps, bwd_eps, constant)
     print(f"The init. data complexity:~2^{{{math.log2(N):.2f}}}.")
