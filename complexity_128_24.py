@@ -82,7 +82,7 @@ if __name__ == "__main__":
     constant = 0.8
     alpha =  1.7
     
-    m_list = [dim_g_new-26, dim_g_new-18, dim_g_new-11] # <--- for chacha7/128
+    m_list = [dim_g_new-33, dim_g_new-18, dim_g_new-11] # <--- for chacha7/128
     bwd_biases = [0.00413] # <--- for chacha7/128
     
     R, r = 7, 4

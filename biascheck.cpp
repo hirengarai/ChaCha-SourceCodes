@@ -47,12 +47,12 @@ int main()
     diff_config.id = {{13, 6}}; // first component is the word and the other is the bit
     diff_config.mask = {{2, 0}, {8, 0}, {7, 7}};
 
-    samples_config.samples_per_thread = 1ULL << 20;
+    samples_config.samples_per_thread = 1ULL << 22;
     samples_config.samples_per_loop = samples_config.samples_per_thread * samples_config.max_num_threads; // by default it will take one less core than all the presented core in your system
     samples_config.total_loop_count = 1ULL << 15;
 
     // ===-------------------------------------------------------------------===
-    pnb_config.pnb_file = "chacha7_pnbs/key2single2.txt";
+    pnb_config.pnb_file = "chacha7_pnbs/key3seg4.txt";
     pnb_config.pnb_pattern_flag = true;
     pnb_config.pnb_carrylock_flag = true;
     pnb_config.pnb_syncopation_flag = false;
