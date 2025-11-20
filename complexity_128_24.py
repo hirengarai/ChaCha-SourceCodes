@@ -77,12 +77,13 @@ def compute_C(m_list, N, dim_g_new, R, r, key_size, alpha):
 # ----------------------------- Example run -----------------------------
 if __name__ == "__main__":
     key_size = 128
-    dim_g_new = 106
+    init_pnb_count = 24
+    dim_g_new = key_size-init_pnb_count
     constant = 0.8
-    alpha = 1.25
+    alpha =  1.7
     
-    m_list = [80, 86, 95] # <--- for chacha7/128
-    bwd_biases = [0.46, 0.48, 0.63, 0.46, 0.78, 0.62, 0.45, 0.47, 0.84] # <--- for chacha7/128
+    m_list = [dim_g_new-26, dim_g_new-18, dim_g_new-11] # <--- for chacha7/128
+    bwd_biases = [0.00413] # <--- for chacha7/128
     
     R, r = 7, 4
     fwd_eps = 0.00317
@@ -90,7 +91,7 @@ if __name__ == "__main__":
     bwd_eps = bias_product(bwd_biases)
     print(f"The product of bwd bias(es):{bwd_eps:.5f} ~ 2^{{{math.log2(bwd_eps):.2f}}}.")
     
-    N = compute_stage_N(alpha, fwd_eps, bwd_eps, constant)
+    N = compute_stage_N(alpha, fwd_eps,bwd_eps , constant)
     print(f"The init. data complexity:~2^{{{math.log2(N):.2f}}}.")
 
     # Compute C using that N
