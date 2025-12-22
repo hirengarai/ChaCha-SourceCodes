@@ -52,7 +52,7 @@ int main()
     samples_config.total_loop_count = 1ULL << 15;
 
     // ===-------------------------------------------------------------------===
-    pnb_config.pnb_file = "chacha7_pnbs/key3seg4.txt";
+    pnb_config.pnb_file = "chacha7_pnbs/pnb24.txt";
     pnb_config.pnb_pattern_flag = true;
     pnb_config.pnb_carrylock_flag = true;
     pnb_config.pnb_syncopation_flag = false;
@@ -260,12 +260,14 @@ double bwbias()
                 {
                     TOGGLE_BIT(strdx0[WORD], BIT);
                     TOGGLE_BIT(dstrdx0[WORD], BIT);
+
+                    if (basic_config.key_bits == 128)
+                    {
+                        TOGGLE_BIT(strdx0[WORD + 4], BIT);
+                        TOGGLE_BIT(dstrdx0[WORD + 4], BIT);
+                    }
                 }
-                if (basic_config.key_bits == 128)
-                {
-                    TOGGLE_BIT(strdx0[WORD + 4], BIT);
-                    TOGGLE_BIT(dstrdx0[WORD + 4], BIT);
-                }
+                
             }
         }
         else
@@ -278,12 +280,14 @@ double bwbias()
                 {
                     TOGGLE_BIT(strdx0[WORD], BIT);
                     TOGGLE_BIT(dstrdx0[WORD], BIT);
+
+                    if (basic_config.key_bits == 128)
+                    {
+                        TOGGLE_BIT(strdx0[WORD + 4], BIT);
+                        TOGGLE_BIT(dstrdx0[WORD + 4], BIT);
+                    }
                 }
-                if (basic_config.key_bits == 128)
-                {
-                    TOGGLE_BIT(strdx0[WORD + 4], BIT);
-                    TOGGLE_BIT(dstrdx0[WORD + 4], BIT);
-                }
+                
             }
         }
 
