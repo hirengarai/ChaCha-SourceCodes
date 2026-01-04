@@ -1,36 +1,63 @@
-# Source Codes of ChaCha
+# ChaCha Source Codes
 
-This repository contains the source codes accompanying the article **Improved Key-Recovery Attack on ChaCha Using
-Carry-Lock Method** on **backward bias detection in ChaCha** using the **carry-lock method**.
+This repository contains the source code accompanying the paper "Improved Key-Recovery Attack on ChaCha Using
+Carry-Lock Method" and focuses on backward bias detection in ChaCha using the carry-lock method.
 
----
+## Supported Targets
 
-## Overview
+- ChaCha-7 / 128-bit key
+- ChaCha-7.5 / 256-bit key
 
-We provide framework for evaluating backward statistical biases in:
+## Methods Included
 
-- **ChaCha-7.5 / 256-bit key**
-- **ChaCha-7 / 128-bit key**
+- Classical approach of Aumasson et al. (https://www.aumasson.jp/data/papers/AFKMR08.pdf)
+- Wang et al. (https://eprint.iacr.org/2023/1087)
+- Pattern-based technique by Dey, Garai, Sarkar, and Sharma (https://ieeexplore.ieee.org/abstract/document/10107619)
 
-Our proposed **carry-lock method** introduces a refined model for identifying and quantifying backward biases in ChaCha by exploiting carry dependencies between key and state bits.
+## Quick Start
 
-This source code also includes comparative implementations of:
-- The **classical approach** of *Aumasson et al.* [https://www.aumasson.jp/data/papers/AFKMR08.pdf]
-- The **Wang et al.** method [https://eprint.iacr.org/2023/1087]
-- The **pattern-based technique** proposed by *Dey, Garai, Sarkar, and Sharma* [https://ieeexplore.ieee.org/abstract/document/10107619]
+```bash
+g++ -std=c++20 -O3 biascheck.cpp -o biascheck
+./biascheck
+```
 
----
+## Configuration Guide (biascheck.cpp)
 
-## Repository Structure
+Change these fields to switch versions, round counts, and bias methods:
 
+- `basic_config.key_bits`: `128` or `256`
+- `basic_config.total_rounds`: `7`, `7.5`, etc. (integer/half/quarter rounds are supported)
+- `diff_config.fwd_rounds`: forward distinguisher rounds (can be fractional)
+- `pnb_config.pnb_file`: PNB file path
+  - Use `chacha7_pnbs/...` for ChaCha-7
+  - Use `chacha7.5_pnbs/...` for ChaCha-7.5
+- `pnb_config.pnb_pattern_flag`, `pnb_config.pnb_carrylock_flag`, `pnb_config.pnb_syncopation_flag`:
+  select the pattern/carry-lock/syncopation behavior
+- `diff_config.id`, `diff_config.mask`: input difference and output mask bits
+- `samples_config.samples_per_thread`, `samples_config.total_loop_count`: runtime and accuracy controls
 
-- `biascheck.cpp` — Source codes for bias measurement. 
-Change the flag inside for different approaches. Change the key size for different versions.   
+### Example presets
 
----
+ChaCha-7 / 128-bit:
+- `basic_config.key_bits = 128`
+- `basic_config.total_rounds = 7`
+- `pnb_config.pnb_file = "chacha7_pnbs/pnb24.txt"`
 
-## How to Use
+ChaCha-7.5 / 256-bit:
+- `basic_config.key_bits = 256`
+- `basic_config.total_rounds = 7.5`
+- `pnb_config.pnb_file = "chacha7.5_pnbs/<choose-a-file>.txt"`
 
-1. Compile the C++ sources with:
-   ```bash
-   g++ -std=c++20 -O3 filename && ./a.out
+## PNB File Notes
+
+PNB files are comma-separated lists of indices. For pattern mode, the last three values encode segment lengths
+(see the comment header in `biascheck.cpp`).
+
+## Repository Layout
+
+- `biascheck.cpp` — main experiment driver
+- `header/` — ChaCha implementation and shared utilities
+- `chacha7_pnbs/` — PNB sets for ChaCha-7
+- `chacha7.5_pnbs/` — PNB sets for ChaCha-7.5
+- `table3/` — scripts used for table generation (Aumasson, carry-lock, syncopation, pattern)
+- `complexity_128_24.py`, `complexity_256.py` — complexity calculations

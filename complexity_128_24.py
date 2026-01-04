@@ -80,10 +80,10 @@ if __name__ == "__main__":
     init_pnb_count = 24
     dim_g_new = key_size-init_pnb_count
     constant = 0.8
-    alpha =  1.7
+    alpha =  3.45
     
     m_list = [dim_g_new-33, dim_g_new-18, dim_g_new-11] # <--- for chacha7/128
-    bwd_biases = [0.00413] # <--- for chacha7/128
+    bwd_biases = [0.00813] # <--- for chacha7/128
     
     R, r = 7, 4
     fwd_eps = 0.00317
