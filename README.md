@@ -27,12 +27,14 @@ Change these fields to switch versions, round counts, and bias methods:
 
 - `basic_config.key_bits`: `128` or `256`
 - `basic_config.total_rounds`: `7`, `7.5`, etc. (integer/half/quarter rounds are supported)
-- `diff_config.fwd_rounds`: forward distinguisher rounds (can be fractional)
+
+<!-- - `diff_config.fwd_rounds`: forward distinguisher rounds (can be fractional) -->
 - `pnb_config.pnb_file`: PNB file path
   - Use `chacha7_pnbs/...` for ChaCha-7
   - Use `chacha7.5_pnbs/...` for ChaCha-7.5
 - `pnb_config.pnb_pattern_flag`, `pnb_config.pnb_carrylock_flag`, `pnb_config.pnb_syncopation_flag`:
   select the pattern/carry-lock/syncopation behavior
+  
 - `diff_config.id`, `diff_config.mask`: input difference and output mask bits
 - `samples_config.samples_per_thread`, `samples_config.total_loop_count`: runtime and accuracy controls
 
