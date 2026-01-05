@@ -57,7 +57,10 @@ PNB files are comma-separated lists of indices. For pattern mode, the last three
 
 ## Repository Layout
 
-- `biascheck.cpp` — main experiment driver
+- `biascheck.cpp` — main experiment driver (here carry-lock is implemented with xor conditions)
+- `biascheck_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
+- `pnb_search_carry_lock_condition.cpp` — PNB search with exact carry-lock filter 
+- `pnb_search_xor_condition.cpp` — PNB search with equivalent XOR-based filter
 - `header/` — ChaCha implementation and shared utilities
 - `chacha7_pnbs/` — PNB sets for ChaCha-7
 - `chacha7.5_pnbs/` — PNB sets for ChaCha-7.5

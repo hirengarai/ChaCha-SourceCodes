@@ -2,8 +2,6 @@
  * REFERENCE IMPLEMENTATION OF chacha cipher round function header file
  *
  *
- * created: 23/09/23
- * updated: 12/11/25
  *
  *
  *
@@ -561,7 +559,7 @@ namespace chacha
 
     // Neutrality measure
     if (cfg.neutrality_measure >= 0.0)
-      output << "| Neutrality Measure:      " << std::fixed << std::setprecision(3)
+      output << "| Neutrality Measure:          " << std::fixed << std::setprecision(3)
              << (cfg.neutrality_measure) << "\n";
 
     // PNB file name and optionally the last value

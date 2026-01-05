@@ -2,8 +2,6 @@
  * REFERENCE IMPLEMENTATION OF some common utility functions
  *
  *
- * created: 13/10/25
- * updated: 12/11/25
  *
  *
  * Synopsis:
@@ -84,7 +82,6 @@ namespace config
         std::string description;
         int key_bits = 256;
 
-        int nonce_bits = 96;
         int block_bits = 512;
         std::size_t words_in_state = 16;
         std::size_t word_size_bits = 32;
@@ -948,7 +945,6 @@ public:
         std::ostringstream ss;
         ss << display::fmtTime("Execution ended");
         ss << "Wall time elapsed: " << display::fmtDurationMS(wall_ms) << "\n";
-        ss << "CPU time used:     " << std::fixed << std::setprecision(3) << cpu << " ms\n";
         return ss.str();
     }
 };
