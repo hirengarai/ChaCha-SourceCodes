@@ -11,19 +11,20 @@ The updated/revised version of the article is uploaded in the article folder alo
 - ChaCha-7 / 128-bit key
 - ChaCha-7.5 / 256-bit key
 
-## Methods Included
+<!-- ## Methods Included
 
 - Classical approach of Aumasson et al. (https://www.aumasson.jp/data/papers/AFKMR08.pdf)
 - Wang et al. (https://eprint.iacr.org/2023/1087)
-- Pattern-based technique by Dey, Garai, Sarkar, and Sharma (https://ieeexplore.ieee.org/abstract/document/10107619)
+- Pattern-based technique by Dey, Garai, Sarkar, and Sharma (https://ieeexplore.ieee.org/abstract/document/10107619) -->
 
 ## Quick Start
+clone the repo.
 
 ```bash
-g++ -std=c++20 -O3 correlation_check.cpp -o correlation_check
-./correlation_check
+g++ -std=c++20 -O3 <filename>
+./a.out
 ```
-
+for pnb search add the neutrality measure in the command in the end.
 ## Configuration Guide (correlation_check.cpp)
 
 Change these fields to switch versions, round counts, and bias methods:
