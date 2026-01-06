@@ -8,7 +8,7 @@
  * strdx0/dstrdx0 segment.
  */
 
-#include "header/chacha.hpp" // chacha round functions
+#include "../header/chacha.hpp" // chacha round functions
 #include <cmath>             // pow function
 #include <ctime>             // time
 #include <chrono>            // execution time duration

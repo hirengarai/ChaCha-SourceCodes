@@ -1,17 +1,19 @@
 /*
  *
- * Search for PNBs in ChaCha using XOR condition
+ * Synopsis:
+ * This file contains the PNB searching programe using carry-lock for the stream cipher ChaCha
+ * 
  * CLI:
- *   g++ -std=c++2c -O3 -flto filename.cpp -o output && ./output nm log
+ *   g++ -std=c++2c -O3 filename.cpp -o output && ./output nm log
  *
  * Needs: commonfiles.hpp, chacha.hpp
  */
 
-#include "header/chacha.hpp" // chacha round functions
-#include <cmath>                 // pow function
-#include <ctime>                 // time
-#include <fstream>               // storing output in a file
-#include <future>                // multithreading
+#include "../header/chacha.hpp" // chacha round functions
+#include <cmath>             // pow function
+#include <ctime>             // time
+#include <fstream>           // storing output in a file
+#include <future>            // multithreading
 #include <sstream>
 #include <thread> // multithreading
 
@@ -24,8 +26,10 @@ chacha::PNBInfo pnb_config;
 
 using BiasEntry = pair<u16, double>;
 
+bool passes_carrylock(const u32 *sumstate, const u32 *dsumstate,
+                      const u32 *strdx0, const u32 *dstrdx0,
+                      int key_word, int key_bit, bool check_mirror);
 double matchcount(int key_bit, int key_word);
-inline bool skip_this(u16 idx, const vector<u16> &skip_bits);
 
 // ---------------- main function -----------------
 int main(int argc, char *argv[])
@@ -39,14 +43,14 @@ int main(int argc, char *argv[])
             pnb_config.neutrality_measure = std::stod(argv[1]);
             if (pnb_config.neutrality_measure < 0.0 || pnb_config.neutrality_measure > 1.0)
             {
-                std::cerr << "Neutrality must be in [0,1]. Using default 0.35.\n";
-                pnb_config.neutrality_measure = 0.35;
+                std::cerr << "Neutrality must be in [0,1]. Using default 0.0.\n";
+                pnb_config.neutrality_measure = 0.0;
             }
         }
         catch (...)
         {
-            std::cerr << "Invalid neutrality input. Using default 0.35.\n";
-            pnb_config.neutrality_measure = 0.35;
+            std::cerr << "Invalid neutrality input. Using default 0.0.\n";
+            pnb_config.neutrality_measure = 0.0;
         }
     }
 
@@ -67,9 +71,8 @@ int main(int argc, char *argv[])
 
     // ---------------- config -----------------
     basic_config.name = "ChaCha";
-    basic_config.mode = "PNBsearch"; // input something useful without gap
-    basic_config.key_bits = 256;
-    basic_config.total_rounds = 7.5;
+    basic_config.key_bits = 128;
+    basic_config.total_rounds = 7;
 
     diff_config.fwd_rounds = 4;
     diff_config.id = {{13, 6}};
@@ -114,6 +117,7 @@ int main(int argc, char *argv[])
         for (size_t key_bit{0}; key_bit < WORD_SIZE; key_bit++)
         {
             u16 global_idx = static_cast<u16>(key_word * WORD_SIZE + key_bit);
+
             sum = 0.0;
             future_results.clear();
 
@@ -207,7 +211,8 @@ int main(int argc, char *argv[])
 
         auto append_index_list = [&](const std::string &label, const std::vector<u16> &list)
         {
-            dmsg << "\n" << label << " (" << list.size() << "):\n{";
+            dmsg << "\n"
+                 << label << " (" << list.size() << "):\n{";
             for (std::size_t i{0}; i < list.size(); ++i)
             {
                 dmsg << list[i];
@@ -219,7 +224,8 @@ int main(int argc, char *argv[])
 
         auto append_bias_list = [&](const std::string &label, const std::vector<std::pair<u16, double>> &list)
         {
-            dmsg << "\n" << label << " (" << list.size() << "):\n{";
+            dmsg << "\n"
+                 << label << " (" << list.size() << "):\n{";
             for (std::size_t i{0}; i < list.size(); ++i)
             {
                 dmsg << list[i].first << ":" << list[i].second;
@@ -266,6 +272,39 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+bool passes_carrylock(const u32 *sumstate, const u32 *dsumstate,
+                      const u32 *strdx0, const u32 *dstrdx0,
+                      int key_word, int key_bit, bool check_mirror)
+{
+    u16 word = static_cast<u16>(key_word + 4);
+    u16 mirror_word = static_cast<u16>(word + 4);
+
+    auto check_word = [&](u16 word_idx)
+    {
+        bool bit1 = GET_BIT(sumstate[word_idx], key_bit);
+        bool bit2 = GET_BIT(dsumstate[word_idx], key_bit);
+
+        if (!key_bit)
+            return bit1 && bit2;
+
+        u32 seg = ops::bitSegment(sumstate[word_idx], 0, key_bit - 1);
+        u32 dseg = ops::bitSegment(dsumstate[word_idx], 0, key_bit - 1);
+
+        u32 strseg = ops::bitSegment(strdx0[word_idx], 0, key_bit - 1);
+        u32 dstrseg = ops::bitSegment(dstrdx0[word_idx], 0, key_bit - 1);
+
+        bool w1 = (seg >= strseg) && (dseg >= dstrseg);
+
+        return w1 && bit1 && bit2;
+    };
+
+    if (!check_word(word))
+        return false;
+    if (check_mirror)
+        return check_word(mirror_word);
+    return true;
+}
+
 // ---------------- worker: match count for one (key_word, key_bit) -----------------
 double matchcount(int key_bit, int key_word)
 {
@@ -295,93 +334,102 @@ double matchcount(int key_bit, int key_word)
 
     for (size_t loop{0}; loop < spt; ++loop)
     {
-        fwd_parity = 0;
         bwd_parity = 0;
 
-        // ---------------- ChaCha setup -----------------
-        chacha::init_iv_const(x0);
-        if (basic_config.key_bits == 128)
-            init_key.key_128bit(key);
-        else
-            init_key.key_256bit(key);
-
-        chacha::insert_key(x0, key);
-
-        ops::copyState(strdx0, x0);
-        ops::copyState(dx0, x0);
-
-        // ---------------- inject diff -----------------
-        for (const auto &d : diff_config.id)
-            TOGGLE_BIT(dx0[d.first], d.second);
-        ops::copyState(dstrdx0, dx0);
-
-        // ---------------- forward round -----------------
-        for (int i{1}; i <= rounded_fwd_rounds; ++i)
+        while (true)
         {
-            frward.RoundFunction(x0, i);
-            frward.RoundFunction(dx0, i);
-        }
-        if (fwd_rounds_are_fractional)
-        {
-            if (rounded_fwd_rounds_are_odd)
-            {
-                frward.Half_1_EvenRF(x0);
-                frward.Half_1_EvenRF(dx0);
-            }
+            fwd_parity = 0;
+
+            // ---------------- ChaCha setup -----------------
+            chacha::init_iv_const(x0);
+            if (basic_config.key_bits == 128)
+                init_key.key_128bit(key);
             else
+                init_key.key_256bit(key);
+
+            chacha::insert_key(x0, key);
+
+            ops::copyState(strdx0, x0);
+            ops::copyState(dx0, x0);
+
+            // ---------------- inject diff -----------------
+            for (const auto &d : diff_config.id)
+                TOGGLE_BIT(dx0[d.first], d.second);
+            ops::copyState(dstrdx0, dx0);
+
+            // ---------------- forward round -----------------
+            for (int i{1}; i <= rounded_fwd_rounds; ++i)
             {
-                frward.Half_1_OddRF(x0);
-                frward.Half_1_OddRF(dx0);
+                frward.RoundFunction(x0, i);
+                frward.RoundFunction(dx0, i);
             }
+            if (fwd_rounds_are_fractional)
+            {
+                if (rounded_fwd_rounds_are_odd)
+                {
+                    frward.Half_1_EvenRF(x0);
+                    frward.Half_1_EvenRF(dx0);
+                }
+                else
+                {
+                    frward.Half_1_OddRF(x0);
+                    frward.Half_1_OddRF(dx0);
+                }
+            }
+
+            // ---------------- XOR state -----------------
+            ops::xorState(DiffState, x0, dx0);
+
+            // ---------------- store forward parity -----------------
+            for (const auto &d : diff_config.mask)
+                fwd_parity ^= GET_BIT(DiffState[d.first], d.second);
+
+            // ---------------- forward round -----------------
+            if (fwd_rounds_are_fractional)
+            {
+                if (rounded_fwd_rounds_are_odd)
+                {
+                    frward.Half_2_EvenRF(x0);
+                    frward.Half_2_EvenRF(dx0);
+                }
+                else
+                {
+                    frward.Half_2_OddRF(x0);
+                    frward.Half_2_OddRF(dx0);
+                }
+            }
+
+            for (int i{fwd_post_round}; i <= rounded_total_rounds; ++i)
+            {
+                frward.RoundFunction(x0, i);
+                frward.RoundFunction(dx0, i);
+            }
+
+            if (basic_config.totalRoundsAreFractional())
+            {
+                if (rounded_total_rounds_are_odd)
+                {
+                    frward.Half_1_EvenRF(x0);
+                    frward.Half_1_EvenRF(dx0);
+                }
+                else
+                {
+                    frward.Half_1_OddRF(x0);
+                    frward.Half_1_OddRF(dx0);
+                }
+            }
+            // ---------------- forward round end -----------------
+
+            // ---------------- Z = X + X^R -----------------
+            ops::addState(sumstate, x0, strdx0);
+            ops::addState(dsumstate, dx0, dstrdx0);
+
+            // ---------------- carry-lock gate -----------------
+            if (passes_carrylock(
+                    sumstate, dsumstate, strdx0, dstrdx0,
+                    key_word, key_bit, basic_config.key_bits == 128))
+                break;
         }
-
-        // ---------------- XOR state -----------------
-        ops::xorState(DiffState, x0, dx0);
-
-        // ---------------- store forward parity -----------------
-        for (const auto &d : diff_config.mask)
-            fwd_parity ^= GET_BIT(DiffState[d.first], d.second);
-
-        // ---------------- forward round -----------------
-        if (fwd_rounds_are_fractional)
-        {
-            if (rounded_fwd_rounds_are_odd)
-            {
-                frward.Half_2_EvenRF(x0);
-                frward.Half_2_EvenRF(dx0);
-            }
-            else
-            {
-                frward.Half_2_OddRF(x0);
-                frward.Half_2_OddRF(dx0);
-            }
-        }
-
-        for (int i{fwd_post_round}; i <= rounded_total_rounds; ++i)
-        {
-            frward.RoundFunction(x0, i);
-            frward.RoundFunction(dx0, i);
-        }
-
-        if (basic_config.totalRoundsAreFractional())
-        {
-            if (rounded_total_rounds_are_odd)
-            {
-                frward.Half_1_EvenRF(x0);
-                frward.Half_1_EvenRF(dx0);
-            }
-            else
-            {
-                frward.Half_1_OddRF(x0);
-                frward.Half_1_OddRF(dx0);
-            }
-        }
-        // ---------------- forward round end -----------------
-
-        // ---------------- Z = X + X^R -----------------
-        ops::xorState(sumstate, x0, strdx0);
-        ops::xorState(dsumstate, dx0, dstrdx0);
-
         // ---------------- flip key bit -----------------
         TOGGLE_BIT(key[key_word], key_bit);
         if (basic_config.key_bits == 128)
@@ -392,8 +440,8 @@ double matchcount(int key_bit, int key_word)
         chacha::insert_key(dstrdx0, key);
 
         // ---------------- Z = X - X^R -----------------
-        ops::xorState(minusstate, sumstate, strdx0);
-        ops::xorState(dminusstate, dsumstate, dstrdx0);
+        ops::minusState(minusstate, sumstate, strdx0);
+        ops::minusState(dminusstate, dsumstate, dstrdx0);
 
         // ---------------- backward round -----------------
         if (basic_config.totalRoundsAreFractional())

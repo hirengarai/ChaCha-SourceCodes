@@ -11,7 +11,7 @@
  * the last three elements are the length of the portions (it is for the pattern purpose).
  */
 
-#include "header/chacha.hpp" // chacha round functions
+#include "../header/chacha.hpp" // chacha round functions
 #include <cmath>        // pow function
 #include <ctime>        // time
 #include <chrono>       // execution time duration
