@@ -3,6 +3,9 @@
 This repository contains the source code accompanying the paper "Improved Key-Recovery Attack on ChaCha Using
 Carry-Lock Method" and focuses on backward bias detection in ChaCha using the carry-lock method.
 
+## Updated Article
+The updated/revised version of the article is uploaded in the article folder along with the difflatex pdf.
+
 ## Supported Targets
 
 - ChaCha-7 / 128-bit key
