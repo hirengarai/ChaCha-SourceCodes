@@ -25,7 +25,7 @@ g++ -std=c++20 -O3 <filename>
 ./a.out
 ```
 for pnb search add the neutrality measure in the command in the end.
-## Configuration Guide (correlation_check.cpp)
+## Configuration Guide (`corr_check/correlation_check.cpp`)
 
 Change these fields to switch versions, round counts, and bias methods:
 
@@ -58,17 +58,18 @@ ChaCha-7.5 / 256-bit:
 
 PNB files are comma-separated lists of indices. The last three values are footer counts; total PNBs =
 sum of those three counts (see `header/chacha.hpp:openPNBFile`). For pattern mode, those counts also
-encode segment lengths (see the comment header in `correlation_check.cpp`).
+encode segment lengths (see the comment header in `corr_check/correlation_check.cpp`).
 
 ## Repository Layout
 
-- `correlation_check.cpp` — correlation calculation (carry-lock via xor conditions)
-- `correlation_check_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
-- `harmonic_correlation_check.cpp` — backward correlation check with carry-lock conditions and paired randomization
-- `pnb_search_carry_lock_condition.cpp` — PNB search with exact carry-lock filter 
-- `pnb_search_xor_condition.cpp` — PNB search with equivalent XOR-based filter
+- `corr_check/correlation_check.cpp` — correlation calculation (carry-lock via xor conditions)
+- `corr_check/correlation_check_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
+- `corr_check/harmonic_correlation_check.cpp` — backward correlation check with carry-lock conditions and paired randomization
+- `pnb_search/pnb_search_carry_lock_condition.cpp` — PNB search with exact carry-lock filter 
+- `pnb_search/pnb_search_xor_condition.cpp` — PNB search with equivalent XOR-based filter
 - `header/` — ChaCha implementation and shared utilities
 - `chacha7_pnbs/` — PNB sets for ChaCha-7
 - `chacha7.5_pnbs/` — PNB sets for ChaCha-7.5
 - `table3/` — scripts used for table generation (Aumasson, carry-lock, syncopation, pattern)
-- `complexity_128_24.py`, `complexity_256.py` — complexity calculations
+- `complexity/complexity_128_24.py`, `complexity/complexity_256.py` — complexity calculations
+- `article/` — revised article PDF and diff
