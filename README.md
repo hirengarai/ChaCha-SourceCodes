@@ -58,7 +58,7 @@ encode segment lengths (see the comment header in `correlation_check.cpp`).
 
 ## Repository Layout
 
-- `correlation_check.cpp` — main experiment driver (carry-lock via xor conditions)
+- `correlation_check.cpp` — correlation calculation (carry-lock via xor conditions)
 - `correlation_check_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
 - `harmonic_correlation_check.cpp` — backward correlation check with carry-lock conditions and paired randomization
 - `pnb_search_carry_lock_condition.cpp` — PNB search with exact carry-lock filter 
