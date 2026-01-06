@@ -17,11 +17,11 @@ Carry-Lock Method" and focuses on backward bias detection in ChaCha using the ca
 ## Quick Start
 
 ```bash
-g++ -std=c++20 -O3 biascheck.cpp -o biascheck
-./biascheck
+g++ -std=c++20 -O3 correlation_check.cpp -o correlation_check
+./correlation_check
 ```
 
-## Configuration Guide (biascheck.cpp)
+## Configuration Guide (correlation_check.cpp)
 
 Change these fields to switch versions, round counts, and bias methods:
 
@@ -54,13 +54,13 @@ ChaCha-7.5 / 256-bit:
 
 PNB files are comma-separated lists of indices. The last three values are footer counts; total PNBs =
 sum of those three counts (see `header/chacha.hpp:openPNBFile`). For pattern mode, those counts also
-encode segment lengths (see the comment header in `biascheck.cpp`).
+encode segment lengths (see the comment header in `correlation_check.cpp`).
 
 ## Repository Layout
 
-- `biascheck.cpp` — main experiment driver (here carry-lock is implemented with xor conditions)
-- `biascheck_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
-- `harmonic_biascheck.cpp` — backward bias check with carry-lock conditions and paired randomization
+- `correlation_check.cpp` — main experiment driver (carry-lock via xor conditions)
+- `correlation_check_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
+- `harmonic_correlation_check.cpp` — backward correlation check with carry-lock conditions and paired randomization
 - `pnb_search_carry_lock_condition.cpp` — PNB search with exact carry-lock filter 
 - `pnb_search_xor_condition.cpp` — PNB search with equivalent XOR-based filter
 - `header/` — ChaCha implementation and shared utilities
