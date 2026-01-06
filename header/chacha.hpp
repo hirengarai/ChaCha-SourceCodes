@@ -48,6 +48,15 @@ constexpr size_t CHACHA_KEY_END = 11;
     (b) = UPDATE((b), (c), 12); \
   } while (0)
 
+#define UFWDQR_12(a, b, c, d, X) \
+  do                            \
+  {                             \
+    if ((X))                    \
+      (c) ^= (d);               \
+    else                        \
+      (c) += (d);               \
+  } while (0)
+
 #define FWDQR_8(a, b, c, d, X) \
   do                           \
   {                            \
@@ -114,6 +123,15 @@ constexpr size_t CHACHA_KEY_END = 11;
   do                                   \
   {                                    \
     (b) = ROTATE_RIGHT((b), 12) ^ (c); \
+    if ((X))                           \
+      (c) ^= (d);                      \
+    else                               \
+      (c) -= (d);                      \
+  } while (0)
+
+#define UBWDQR_12(a, b, c, d, X)        \
+  do                                   \
+  {                                    \
     if ((X))                           \
       (c) ^= (d);                      \
     else                               \
@@ -197,6 +215,7 @@ public:
     FWDQR_16(x[2], x[7], x[8], x[13], false);
     FWDQR_16(x[3], x[4], x[9], x[14], false);
   }
+
   void ODDARX_12(u32 *x)
   {
     FWDQR_12(x[0], x[4], x[8], x[12], false);
@@ -204,6 +223,25 @@ public:
     FWDQR_12(x[2], x[6], x[10], x[14], false);
     FWDQR_12(x[3], x[7], x[11], x[15], false);
   }
+
+  void UODDARX_12(u32 *x)
+  {
+    UFWDQR_12(x[0], x[4], x[8], x[12], false);
+    UFWDQR_12(x[1], x[5], x[9], x[13], false);
+    UFWDQR_12(x[2], x[6], x[10], x[14], false);
+    UFWDQR_12(x[3], x[7], x[11], x[15], false);
+  }
+
+  void UEVENARX_12(u32 *x)
+  {
+    UFWDQR_12(x[0], x[5], x[10], x[15], false);
+    UFWDQR_12(x[1], x[6], x[11], x[12], false);
+    UFWDQR_12(x[2], x[7], x[8], x[13], false);
+    UFWDQR_12(x[3], x[4], x[9], x[14], false);
+  }
+
+
+
   void EVENARX_12(u32 *x)
   {
     FWDQR_12(x[0], x[5], x[10], x[15], false);
@@ -326,6 +364,7 @@ public:
     BWDQR_16(x[2], x[7], x[8], x[13], false);
     BWDQR_16(x[3], x[4], x[9], x[14], false);
   }
+
   void ODDARX_12(u32 *x)
   {
     BWDQR_12(x[0], x[4], x[8], x[12], false);
@@ -339,6 +378,21 @@ public:
     BWDQR_12(x[1], x[6], x[11], x[12], false);
     BWDQR_12(x[2], x[7], x[8], x[13], false);
     BWDQR_12(x[3], x[4], x[9], x[14], false);
+  }
+
+  void UODDARX_12(u32 *x)
+  {
+    UBWDQR_12(x[0], x[4], x[8], x[12], false);
+    UBWDQR_12(x[1], x[5], x[9], x[13], false);
+    UBWDQR_12(x[2], x[6], x[10], x[14], false);
+    UBWDQR_12(x[3], x[7], x[11], x[15], false);
+  }
+  void UEVENARX_12(u32 *x)
+  {
+    UBWDQR_12(x[0], x[5], x[10], x[15], false);
+    UBWDQR_12(x[1], x[6], x[11], x[12], false);
+    UBWDQR_12(x[2], x[7], x[8], x[13], false);
+    UBWDQR_12(x[3], x[4], x[9], x[14], false);
   }
 
   void ODDARX_8(u32 *x)

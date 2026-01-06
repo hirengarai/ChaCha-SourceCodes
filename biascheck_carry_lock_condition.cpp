@@ -28,9 +28,6 @@ config::SamplesInfo samples_config;
 chacha::PNBInfo pnb_config;
 
 double bwbias();
-bool passes_carrylock(const u32 *sumstate, const u32 *dsumstate,
-                      const u32 *strdx0, const u32 *dstrdx0,
-                      int key_word, int key_bit, bool check_mirror);
 bool passes_carrylock_for_pnbs(const u32 *sumstate, const u32 *dsumstate,
                                const u32 *strdx0, const u32 *dstrdx0,
                                const std::vector<u16> &pnbs, int key_bits);
@@ -211,43 +208,6 @@ double bwbias()
                 pnb_config.pnbs, basic_config.key_bits);
             if (!carrylock_ok)
                 continue;
-
-            // u16 w, b;
-
-            // // for (size_t i{0}; i < pnb_config.pnbs.size(); ++i)
-            // //     chacha::calculate_word_bit(pnb_config.pnbs[i], w, b);
-
-            // chacha::calculate_word_bit(66, w, b);
-
-            // bool bit1 = GET_BIT(sumstate[w], b);
-            // bool bit2 = GET_BIT(dsumstate[w], b);
-
-            // bool sbit1 = GET_BIT(sumstate[w + 4], b);
-            // bool sbit2 = GET_BIT(dsumstate[w + 4], b);
-
-            // u32 seg = ops::bitSegment(sumstate[w], 0, b - 1);
-            // u32 dseg = ops::bitSegment(dsumstate[w], 0, b - 1);
-
-            // u32 strseg = ops::bitSegment(strdx0[w], 0, b - 1);
-            // u32 dstrseg = ops::bitSegment(dstrdx0[w], 0, b - 1);
-
-            // u32 sseg = ops::bitSegment(sumstate[w + 4], 0, b - 1);
-            // u32 dsseg = ops::bitSegment(dsumstate[w + 4], 0, b - 1);
-
-            // u32 sstrseg = ops::bitSegment(strdx0[w + 4], 0, b - 1);
-            // u32 dsstrseg = ops::bitSegment(dstrdx0[w + 4], 0, b - 1);
-
-            // bool w1 = (seg >= strseg) && (dseg >= dstrseg) && (sseg >= sstrseg) && (dsseg >= dsstrseg) && bit1 && bit2 && sbit1 && sbit2;
-
-            // chacha::calculate_word_bit(67, w, b);
-
-            // bool bit11 = GET_BIT(sumstate[w], b);
-            // bool bit21 = GET_BIT(dsumstate[w], b);
-
-            // bool sbit11 = GET_BIT(sumstate[w + 4], b);
-            // bool sbit21 = GET_BIT(dsumstate[w + 4], b);
-
-            // if (w1 && bit11 && bit21 && sbit11 && sbit21)
             break;
         }
 
@@ -364,38 +324,6 @@ double bwbias()
     return static_cast<double>(thread_match_count);
 }
 
-bool passes_carrylock(const u32 *sumstate, const u32 *dsumstate,
-                      const u32 *strdx0, const u32 *dstrdx0,
-                      int key_word, int key_bit, bool check_mirror)
-{
-    u16 word = static_cast<u16>(key_word + 4);
-    u16 mirror_word = static_cast<u16>(word + 4);
-
-    auto check_word = [&](u16 word_idx)
-    {
-        bool bit1 = GET_BIT(sumstate[word_idx], key_bit);
-        bool bit2 = GET_BIT(dsumstate[word_idx], key_bit);
-
-        if (!key_bit)
-            return bit1 && bit2;
-
-        u32 seg = ops::bitSegment(sumstate[word_idx], 0, key_bit - 1);
-        u32 dseg = ops::bitSegment(dsumstate[word_idx], 0, key_bit - 1);
-
-        u32 strseg = ops::bitSegment(strdx0[word_idx], 0, key_bit - 1);
-        u32 dstrseg = ops::bitSegment(dstrdx0[word_idx], 0, key_bit - 1);
-
-        bool w1 = (seg >= strseg) && (dseg >= dstrseg);
-
-        return w1 && bit1 && bit2;
-    };
-
-    if (!check_word(word))
-        return false;
-    if (check_mirror)
-        return check_word(mirror_word);
-    return true;
-}
 
 bool passes_carrylock_for_pnbs(const u32 *sumstate, const u32 *dsumstate,
                                const u32 *strdx0, const u32 *dstrdx0,

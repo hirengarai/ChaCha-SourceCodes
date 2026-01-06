@@ -1,6 +1,18 @@
 /*
+ * REFERENCE IMPLEMENTATION OF Aumasson PNB searching programe where the data is divided into threads not the key words
  *
- * Search for PNBs in ChaCha using XOR condition
+ *
+ * created: 10/05/25
+ * updated: 01/12/25
+ *
+ * by Hiren
+ * Research fellow
+ * NTU, Singapore
+ *
+ * Synopsis:
+ * This file contains the PNB searching programe for the stream cipher ChaCha but here threads are not divided into keywords,
+ * rather the processed data is divided into threads.
+ *
  * CLI:
  *   g++ -std=c++2c -O3 -flto filename.cpp -o output && ./output nm log
  *
@@ -69,7 +81,7 @@ int main(int argc, char *argv[])
     basic_config.name = "ChaCha";
     basic_config.mode = "PNBsearch"; // input something useful without gap
     basic_config.key_bits = 256;
-    basic_config.total_rounds = 7.5;
+    basic_config.total_rounds = 7;
 
     diff_config.fwd_rounds = 4;
     diff_config.id = {{13, 6}};
@@ -82,12 +94,16 @@ int main(int argc, char *argv[])
     size_t key_count =
         (basic_config.key_bits == 128) ? KEY_COUNT - 4 : KEY_COUNT;
 
-    pnb_config.pnb_search_flag = true;
-
     display::showBasicConfig(basic_config, dmsg);
     display::showDiffConfig(diff_config, dmsg);
     display::showSamplesConfig(samples_config, dmsg);
     chacha::showPNBconfig(pnb_config, dmsg);
+
+    vector<u16> skip_bits = {
+        // example:
+        // 2, 5, 48, 74, ...
+    };
+    sort(skip_bits.begin(), skip_bits.end());
 
     cout << dmsg.str();
     // ---------------- config end -----------------
@@ -114,6 +130,10 @@ int main(int argc, char *argv[])
         for (size_t key_bit{0}; key_bit < WORD_SIZE; key_bit++)
         {
             u16 global_idx = static_cast<u16>(key_word * WORD_SIZE + key_bit);
+
+            if (skip_this(global_idx, skip_bits))
+                continue; // completely ignored and nothing is printed
+
             sum = 0.0;
             future_results.clear();
 
@@ -134,7 +154,7 @@ int main(int argc, char *argv[])
             // samples_per_loop = samples_per_thread * max_num_threads
             bias = (2.0 * sum / static_cast<double>(samples_config.samples_per_loop)) - 1.0;
 
-            if (std::fabs(bias) >= pnb_config.neutrality_measure)
+            if (std::fabs(bias) >= pnb_config.neutrality_measure && std::fabs(bias) > 0.0)
                 temp_pnb.push_back({global_idx, bias});
             else
                 temp_non_pnb.push_back({global_idx, bias});
@@ -376,11 +396,25 @@ double matchcount(int key_bit, int key_word)
                 frward.Half_1_OddRF(dx0);
             }
         }
+
+        frward.EVENARX_16(x0);
+        frward.EVENARX_16(dx0);
+
+        UFWDQR_12(x0[0], x0[5], x0[10], x0[15], false);
+        UFWDQR_12(x0[1], x0[6], x0[11], x0[12], false);
+        UFWDQR_12(x0[2], x0[7], x0[8], x0[13], false);
+        UFWDQR_12(x0[3], x0[4], x0[9], x0[14], false);
+
+        UFWDQR_12(dx0[0], dx0[5], dx0[10], dx0[15], false);
+        UFWDQR_12(dx0[1], dx0[6], dx0[11], dx0[12], false);
+        UFWDQR_12(dx0[2], dx0[7], dx0[8], dx0[13], false);
+        UFWDQR_12(dx0[3], dx0[4], dx0[9], dx0[14], false);
+
         // ---------------- forward round end -----------------
 
         // ---------------- Z = X + X^R -----------------
-        ops::xorState(sumstate, x0, strdx0);
-        ops::xorState(dsumstate, dx0, dstrdx0);
+        ops::addState(sumstate, x0, strdx0);
+        ops::addState(dsumstate, dx0, dstrdx0);
 
         // ---------------- flip key bit -----------------
         TOGGLE_BIT(key[key_word], key_bit);
@@ -392,10 +426,24 @@ double matchcount(int key_bit, int key_word)
         chacha::insert_key(dstrdx0, key);
 
         // ---------------- Z = X - X^R -----------------
-        ops::xorState(minusstate, sumstate, strdx0);
-        ops::xorState(dminusstate, dsumstate, dstrdx0);
+        ops::minusState(minusstate, sumstate, strdx0);
+        ops::minusState(dminusstate, dsumstate, dstrdx0);
 
         // ---------------- backward round -----------------
+
+        UBWDQR_12(dminusstate[0], dminusstate[5], dminusstate[10], dminusstate[15], false);
+        UBWDQR_12(dminusstate[1], dminusstate[6], dminusstate[11], dminusstate[12], false);
+        UBWDQR_12(dminusstate[2], dminusstate[7], dminusstate[8], dminusstate[13], false);
+        UBWDQR_12(dminusstate[3], dminusstate[4], dminusstate[9], dminusstate[14], false);
+
+        UBWDQR_12(minusstate[0], minusstate[5], minusstate[10], minusstate[15], false);
+        UBWDQR_12(minusstate[1], minusstate[6], minusstate[11], minusstate[12], false);
+        UBWDQR_12(minusstate[2], minusstate[7], minusstate[8], minusstate[13], false);
+        UBWDQR_12(minusstate[3], minusstate[4], minusstate[9], minusstate[14], false);
+
+        bckward.EVENARX_16(minusstate);
+        bckward.EVENARX_16(dminusstate);
+
         if (basic_config.totalRoundsAreFractional())
         {
             if (rounded_total_rounds_are_odd)
@@ -443,4 +491,10 @@ double matchcount(int key_bit, int key_word)
     }
 
     return static_cast<double>(thread_match_count);
+}
+
+// ---------------- skip helper -----------------
+inline bool skip_this(u16 idx, const vector<u16> &skip_bits)
+{
+    return std::binary_search(skip_bits.begin(), skip_bits.end(), idx);
 }

@@ -52,13 +52,15 @@ ChaCha-7.5 / 256-bit:
 
 ## PNB File Notes
 
-PNB files are comma-separated lists of indices. For pattern mode, the last three values encode segment lengths
-(see the comment header in `biascheck.cpp`).
+PNB files are comma-separated lists of indices. The last three values are footer counts; total PNBs =
+sum of those three counts (see `header/chacha.hpp:openPNBFile`). For pattern mode, those counts also
+encode segment lengths (see the comment header in `biascheck.cpp`).
 
 ## Repository Layout
 
 - `biascheck.cpp` — main experiment driver (here carry-lock is implemented with xor conditions)
 - `biascheck_carry_lock_condition.cpp` — carry-lock segment condition checker (exact segment rules)
+- `harmonic_biascheck.cpp` — backward bias check with carry-lock conditions and paired randomization
 - `pnb_search_carry_lock_condition.cpp` — PNB search with exact carry-lock filter 
 - `pnb_search_xor_condition.cpp` — PNB search with equivalent XOR-based filter
 - `header/` — ChaCha implementation and shared utilities

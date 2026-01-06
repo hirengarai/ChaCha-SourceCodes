@@ -1,22 +1,19 @@
 /*
- * REFERENCE IMPLEMENTATION OF the backward bias (epsilon_a) searching programme in multi-threaded manner, the carrylock, synco or pattern. carrylock is implemented via xor operation.
- *
- *
- *
- *
- * Synopsis:
- * This file contains the various types of backward bias searching programme for the stream cipher ChaCha.
- * running command: g++ filename && ./a.out or g++ -std=c++23 -flto -O3 filename -o output && ./output
- * necessary files to run the prog: chacha.hpp, commonfiles.hpp, one txt file containg the PNBs in block mode (e.g if {2,3,4,7,21,22} is a 6 pnb set then the .txt file should have it like 2, 3, 21, 4, 22, 7, 3, 2, 1
- * the last three elements are the length of the portions (it is for the pattern purpose).
+ * Backward bias check with carry-lock conditions on harmonic pairs.
+ * PNB .txt format: list of PNB indices (comma/space separated) followed by 3 footer
+ * counts; total PNBs = sum of the 3 counts (see openPNBFile in chacha.hpp).
+ * Carry-lock rule (short): if strdx0/dstrdx0 has a 1 at a PNB bit, then
+ * sumstate/dsumstate must also have a 1 there; for each word, if the minimum
+ * PNB bit > 0 then sumstate/dsumstate segment [0..min_bit-1] >= corresponding
+ * strdx0/dstrdx0 segment.
  */
 
 #include "header/chacha.hpp" // chacha round functions
-#include <cmath>        // pow function
-#include <ctime>        // time
-#include <chrono>       // execution time duration
-#include <fstream>      // storing output in a file
-#include <future>       // multithreading
+#include <cmath>             // pow function
+#include <ctime>             // time
+#include <chrono>            // execution time duration
+#include <fstream>           // storing output in a file
+#include <future>            // multithreading
 #include <sstream>
 #include <sys/time.h> // execution time started
 #include <thread>     // multithreading
@@ -29,6 +26,9 @@ config::SamplesInfo samples_config;
 chacha::PNBInfo pnb_config;
 
 double bwbias();
+bool passes_carrylock_for_pnbs(const u32 *sumstate, const u32 *dsumstate,
+                               const u32 *strdx0, const u32 *dstrdx0,
+                               const std::vector<u16> &pnbs, int key_bits);
 
 int main()
 {
@@ -38,19 +38,19 @@ int main()
     basic_config.name = "ChaCha";
     basic_config.key_bits = 256;
     basic_config.mode = "Backward Bias Check";
-    basic_config.total_rounds = 7;
+    basic_config.total_rounds = 7.5;
 
     diff_config.fwd_rounds = 4;
-    
+
     diff_config.id = {{13, 6}}; // first component is the word and the other is the bit
     diff_config.mask = {{2, 0}, {8, 0}, {7, 7}};
 
-    samples_config.samples_per_thread = 1ULL << 20;
+    samples_config.samples_per_thread = 1ULL << 10;
     samples_config.samples_per_loop = samples_config.samples_per_thread * samples_config.max_num_threads; // by default it will take one less core than all the presented core in your system
     samples_config.total_loop_count = 1ULL << 10;
 
     // ===-------------------------------------------------------------------===
-    pnb_config.pnb_file = "pnb_reduced.txt"; // specify the pnb file name here
+    pnb_config.pnb_file = "harmonic_pair.txt";
     pnb_config.pnb_pattern_flag = false;
     pnb_config.pnb_carrylock_flag = false;
     pnb_config.pnb_syncopation_flag = false;
@@ -198,99 +198,34 @@ double bwbias()
                     frward.Half_1_OddRF(dx0);
                 }
             }
-
-            frward.EVENARX_16(x0);
-            frward.EVENARX_16(dx0);
-
-            frward.UEVENARX_12(x0);
-            frward.UEVENARX_12(dx0);
             // ---------------------------FW ROUND ENDs-----------------------------------------------------------------------
 
             // modular addition of states
             ops::addState(sumstate, x0, strdx0);
             ops::addState(dsumstate, dx0, dstrdx0);
 
-            if (pnb_config.pnb_carrylock_flag)
-            {
-                ops::xorState(sumstate, x0, strdx0);
-                ops::xorState(dsumstate, dx0, dstrdx0);
-                break;
-            }
-            // for syncopation you have to change the conditions accordingly
-            else if (pnb_config.pnb_syncopation_flag)
-            {
-                u16 zcond = GET_BIT(sumstate[6], 9); 
-                u16 dzcond = GET_BIT(dsumstate[6], 9);
-                u16 kcond = GET_BIT(strdx0[6], 9);
-
-                if ((zcond ^ kcond) && (dzcond ^ kcond))
-                    break;
-            }
-            else
-                break;
+            bool carrylock_ok = passes_carrylock_for_pnbs(
+                sumstate, dsumstate, strdx0, dstrdx0,
+                pnb_config.pnbs, basic_config.key_bits);
+            if (!carrylock_ok)
+                continue;
+            break;
         }
 
         // randomise the PNBs
-        if (pnb_config.pnb_pattern_flag)
+        const size_t half = pnb_config.pnbs.size() / 2;
+        for (size_t i{0}; i < half; ++i)
         {
-            for (size_t i{0}; i < pnb_config.pnbs_in_pattern.size(); ++i)
-            {
-                chacha::calculate_word_bit(pnb_config.pnbs_in_pattern[i], WORD, BIT);
-                UNSET_BIT(strdx0[WORD], BIT);
-                UNSET_BIT(dstrdx0[WORD], BIT);
+            u16 w1, b1, w2, b2;
+            chacha::calculate_word_bit(pnb_config.pnbs[i], w1, b1);
+            chacha::calculate_word_bit(pnb_config.pnbs[i + half], w2, b2);
 
-                if (basic_config.key_bits == 128)
-                {
-                    UNSET_BIT(strdx0[WORD + 4], BIT);
-                    UNSET_BIT(dstrdx0[WORD + 4], BIT);
-                }
-            }
-            for (size_t i{0}; i < pnb_config.pnbs_in_border.size(); ++i)
+            if (RandomBoolean())
             {
-                chacha::calculate_word_bit(pnb_config.pnbs_in_border[i], WORD, BIT);
-                SET_BIT(strdx0[WORD], BIT);
-                SET_BIT(dstrdx0[WORD], BIT);
-                if (basic_config.key_bits == 128)
-                {
-                    SET_BIT(strdx0[WORD + 4], BIT);
-                    SET_BIT(dstrdx0[WORD + 4], BIT);
-                }
-            }
-            for (size_t i{0}; i < pnb_config.rest_pnbs.size(); ++i)
-            {
-                chacha::calculate_word_bit(pnb_config.rest_pnbs[i], WORD, BIT);
-                if (RandomBoolean())
-                {
-                    TOGGLE_BIT(strdx0[WORD], BIT);
-                    TOGGLE_BIT(dstrdx0[WORD], BIT);
-
-                    if (basic_config.key_bits == 128)
-                    {
-                        TOGGLE_BIT(strdx0[WORD + 4], BIT);
-                        TOGGLE_BIT(dstrdx0[WORD + 4], BIT);
-                    }
-                }
-                
-            }
-        }
-        else
-        {
-            for (size_t i{0}; i < pnb_config.pnbs.size(); ++i)
-            {
-                chacha::calculate_word_bit(pnb_config.pnbs[i], WORD, BIT);
-
-                if (RandomBoolean())
-                {
-                    TOGGLE_BIT(strdx0[WORD], BIT);
-                    TOGGLE_BIT(dstrdx0[WORD], BIT);
-
-                    if (basic_config.key_bits == 128)
-                    {
-                        TOGGLE_BIT(strdx0[WORD + 4], BIT);
-                        TOGGLE_BIT(dstrdx0[WORD + 4], BIT);
-                    }
-                }
-                
+                TOGGLE_BIT(strdx0[w1], b1);
+                TOGGLE_BIT(dstrdx0[w1], b1);
+                TOGGLE_BIT(strdx0[w2], b2);
+                TOGGLE_BIT(dstrdx0[w2], b2);
             }
         }
 
@@ -298,20 +233,7 @@ double bwbias()
         ops::minusState(minusstate, sumstate, strdx0);
         ops::minusState(dminusstate, dsumstate, dstrdx0);
 
-        if (pnb_config.pnb_carrylock_flag)
-        {
-            ops::xorState(minusstate, sumstate, strdx0);
-            ops::xorState(dminusstate, dsumstate, dstrdx0);
-        }
-
         // ---------------------------BW ROUND STARTS--------------------------------------------------------------------
-
-        bckward.UEVENARX_12(minusstate);
-        bckward.UEVENARX_12(dminusstate);
-
-        bckward.EVENARX_16(minusstate);
-        bckward.EVENARX_16(dminusstate);
-
         if (basic_config.totalRoundsAreFractional())
         {
             if (rounded_total_rounds_odd)
@@ -356,4 +278,58 @@ double bwbias()
         threadloop++;
     }
     return static_cast<double>(thread_match_count);
+}
+
+bool passes_carrylock_for_pnbs(const u32 *sumstate, const u32 *dsumstate,
+                               const u32 *strdx0, const u32 *dstrdx0,
+                               const std::vector<u16> &pnbs, int key_bits)
+{
+    bool check_mirror = (key_bits == 128);
+    std::vector<int> min_bit_by_word(WORD_COUNT, -1);
+
+    auto bit_is_ok = [&](u16 word_idx, u16 bit)
+    {
+        return GET_BIT(sumstate[word_idx], bit) && GET_BIT(dsumstate[word_idx], bit);
+    };
+
+    for (u16 idx : pnbs)
+    {
+        u16 word, bit;
+
+        chacha::calculate_word_bit(idx, word, bit);
+
+        if (!bit_is_ok(word, bit))
+            return false;
+        if (check_mirror && !bit_is_ok(static_cast<u16>(word + 4), bit))
+            return false;
+
+        if (min_bit_by_word[word] == -1 || bit < min_bit_by_word[word])
+            min_bit_by_word[word] = bit;
+        if (check_mirror)
+        {
+            u16 mirror_word = static_cast<u16>(word + 4);
+            if (min_bit_by_word[mirror_word] == -1 || bit < min_bit_by_word[mirror_word])
+                min_bit_by_word[mirror_word] = bit;
+        }
+    }
+
+    for (u16 word = 0; word < WORD_COUNT; ++word)
+    {
+        int bit = min_bit_by_word[word];
+        if (bit < 0)
+            continue;
+        if (bit == 0)
+            continue;
+
+        u32 seg = ops::bitSegment(sumstate[word], 0, bit - 1);
+        u32 dseg = ops::bitSegment(dsumstate[word], 0, bit - 1);
+
+        u32 strseg = ops::bitSegment(strdx0[word], 0, bit - 1);
+        u32 dstrseg = ops::bitSegment(dstrdx0[word], 0, bit - 1);
+
+        if (!((seg >= strseg) && (dseg >= dstrseg)))
+            return false;
+    }
+
+    return true;
 }
