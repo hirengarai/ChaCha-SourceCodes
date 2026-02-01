@@ -69,4 +69,3 @@ encode segment lengths (see the comment header in `corr_check/correlation_check.
 - `chacha7.5_pnbs/` — PNB sets for ChaCha-7.5
 - `table3/` — scripts used for table generation (Aumasson, carry-lock, syncopation, pattern)
 - `complexity/complexity_128_24.py`, `complexity/complexity_256.py` — complexity calculations
-- `article/` — revised article PDF and diff
