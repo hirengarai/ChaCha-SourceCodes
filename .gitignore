@@ -10,3 +10,7 @@ a.out
 
 # Manuscript (not part of the review artefact)
 indocrypt/
+
+# Python
+__pycache__/
+*.pyc
