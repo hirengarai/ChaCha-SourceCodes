@@ -24,7 +24,7 @@ def bias_product(biases):
     return prod
 
 
-def compute_stage_N(alpha, fwd_eps, bwd_eps, constant=None):
+def compute_stage_N(alpha, fwd_eps, bwd_eps, p_nd=None):
     """
     Compute the required data complexity N for a single stage.
 
@@ -33,11 +33,13 @@ def compute_stage_N(alpha, fwd_eps, bwd_eps, constant=None):
         numerator = sqrt(alpha * ln 4) - constant * sqrt(1 - epsilon^2)
         N = (numerator / epsilon)^2
 
-    If constant is not provided, defaults to NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
+    If p_nd is not provided, defaults to NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
     """
 
-    if constant is None:
+    if p_nd is None:
         constant = NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
+    else:
+        constant = NormalDist(mu=0, sigma=1).inv_cdf(p_nd)
 
     epsilon = fwd_eps * bwd_eps
     print(f"The product of fwd and bwd biases:~2^{{{math.log2(epsilon):.2f}}}.")
@@ -77,23 +79,34 @@ def compute_C(m_list, N, dim_g_new, R, r, key_size, alpha):
 # ----------------------------- Example run -----------------------------
 if __name__ == "__main__":
     key_size = 256
-    dim_g_new = 226
-    constant = 0.8
-    alpha = 12.5
+    init_pnb_count = 30
+    dim_g_new = key_size - init_pnb_count
+    p_nd = 0.85
+    alpha = 16
 
-    
-    m_list = [212, 207, 211] # <--- for chacha7.5/256
-    bwd_biases =    [0.68,      0.72,     0.78,     0.63,       0.62, 0.62, 0.67, 0.84, 0.81, 0.78, 0.72, 0.97, 0.85] # <---- for chacha7.5/256
-    
-    R, r = 7.5, 4
-    fwd_eps = 0.00317
-    
-    
-    bwd_eps = bias_product(bwd_biases)
-    print(f"The product of bwd bias(es):{bwd_eps:.5f}~2^{{{math.log2(bwd_eps):.2f}}}.")
-    
-    N = compute_stage_N(alpha, fwd_eps, bwd_eps, constant)
+    pnb_per_bit = [14, 19, 15]          # <--- for chacha7.5/256
+    bwd_biases = [0.72, 0.97, 0.85]                     # <--- for chacha7.5/256
+
+    # one bwd bias per significant-bit stage, else the stages are misaligned
+    if len(pnb_per_bit) != len(bwd_biases):
+        raise ValueError(
+            f"length mismatch: pnb_per_bit has {len(pnb_per_bit)} entries, "
+            f"bwd_biases has {len(bwd_biases)}"
+        )
+
+    sig_per_bit = []
+    for count in pnb_per_bit:
+        sig_per_bit.append(dim_g_new - count)
+
+    total_round, dist_round = 7.5, 4
+    fwd_eps = 0.0021
+    bwd_bias = 0.085
+
+    bwd_eps = bwd_bias * bias_product(bwd_biases)
+    print(f"The product of bwd bias(es):{bwd_eps:.5f} ~ 2^{{{math.log2(bwd_eps):.2f}}}.")
+
+    N = compute_stage_N(alpha, fwd_eps, bwd_eps, p_nd)
     print(f"The init. data complexity:~2^{{{math.log2(N):.2f}}}.")
 
     # Compute C using that N
-    compute_C(m_list, N, dim_g_new, R, r, key_size, alpha)
+    compute_C(sig_per_bit, N, dim_g_new, total_round, dist_round, key_size, alpha)

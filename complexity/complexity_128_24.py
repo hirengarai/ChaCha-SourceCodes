@@ -24,7 +24,7 @@ def bias_product(biases):
     return prod
 
 
-def compute_stage_N(alpha, fwd_eps, bwd_eps, constant=None):
+def compute_stage_N(alpha, fwd_eps, bwd_eps, p_nd=None):
     """
     Compute the required data complexity N for a single stage.
 
@@ -33,11 +33,13 @@ def compute_stage_N(alpha, fwd_eps, bwd_eps, constant=None):
         numerator = sqrt(alpha * ln 4) - constant * sqrt(1 - epsilon^2)
         N = (numerator / epsilon)^2
 
-    If constant is not provided, defaults to NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
+    If p_nd is not provided, defaults to NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
     """
 
-    if constant is None:
+    if p_nd is None:
         constant = NormalDist(mu=0, sigma=1).inv_cdf(0.0013)
+    else:
+        constant = NormalDist(mu=0, sigma=1).inv_cdf(p_nd)
 
     epsilon = fwd_eps * bwd_eps
     print(f"The product of fwd and bwd biases:~2^{{{math.log2(epsilon):.2f}}}.")
@@ -79,20 +81,31 @@ if __name__ == "__main__":
     key_size = 128
     init_pnb_count = 24
     dim_g_new = key_size-init_pnb_count
-    constant = 0.8
-    alpha =  3.45
-    
-    m_list = [dim_g_new-33, dim_g_new-18, dim_g_new-11] # <--- for chacha7/128
-    bwd_biases = [0.00813] # <--- for chacha7/128
-    
-    R, r = 7, 4
-    fwd_eps = 0.00317
-    
-    bwd_eps = bias_product(bwd_biases)
+    p_nd = 0.85
+    alpha =  2.69
+    total_round, dist_round = 7, 4
+    fwd_eps = 0.0021
+    bwd_bias = 0.00813              # <--- for chacha7/128
+
+    pnb_per_bit = [33, 18, 11]      # <--- for chacha7/128
+    bwd_biases = [1.0, 1.0, 1.0]    # <--- per-stage refinement; 1.0 = none measured
+
+    # one bwd bias per significant-bit stage, else the stages are misaligned
+    if len(pnb_per_bit) != len(bwd_biases):
+        raise ValueError(
+            f"length mismatch: pnb_per_bit has {len(pnb_per_bit)} entries, "
+            f"bwd_biases has {len(bwd_biases)}"
+        )
+
+    sig_per_bit = []
+    for count in pnb_per_bit:
+        sig_per_bit.append(dim_g_new - count)
+
+    bwd_eps = bwd_bias * bias_product(bwd_biases)
     print(f"The product of bwd bias(es):{bwd_eps:.5f} ~ 2^{{{math.log2(bwd_eps):.2f}}}.")
-    
-    N = compute_stage_N(alpha, fwd_eps,bwd_eps , constant)
+
+    N = compute_stage_N(alpha, fwd_eps, bwd_eps, p_nd)
     print(f"The init. data complexity:~2^{{{math.log2(N):.2f}}}.")
 
     # Compute C using that N
-    compute_C(m_list, N, dim_g_new, R, r, key_size, alpha)
+    compute_C(sig_per_bit, N, dim_g_new, total_round, dist_round, key_size, alpha)

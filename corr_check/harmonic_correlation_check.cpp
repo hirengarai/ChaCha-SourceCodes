@@ -1,335 +1,560 @@
 /*
- * Backward bias check with carry-lock conditions on harmonic pairs.
- * PNB .txt format: list of PNB indices (comma/space separated) followed by 3 footer
- * counts; total PNBs = sum of the 3 counts (see openPNBFile in chacha.hpp).
- * Carry-lock rule (short): if strdx0/dstrdx0 has a 1 at a PNB bit, then
- * sumstate/dsumstate must also have a 1 there; for each word, if the minimum
- * PNB bit > 0 then sumstate/dsumstate segment [0..min_bit-1] >= corresponding
- * strdx0/dstrdx0 segment.
+ *
+ * Synopsis:
+ * Backward-bias (epsilon_a) measurement for ChaCha with HARMONIC carry-lock
+ * conditions, using paired PNB randomization.
+ *
+ * Carry-lock rule (harmonic):
+ *   (a) PNB-bit constraint: for every PNB at (word w, bit b),
+ *       sumstate[w] AND dsumstate[w] must both have bit b set.
+ *       For a 128-bit key the same bit in the mirror word (w+4) is also
+ *       required.
+ *   (b) Min-bit segment constraint: for each word w that contains at least
+ *       one PNB, let m = min PNB bit in w. The low m bits of sumstate[w]
+ *       must be >= the low m bits of strdx0[w] (and the same for dsumstate
+ *       vs dstrdx0).
+ *   Samples failing either condition are resampled.
+ *
+ * PNB randomization (harmonic pairs):
+ *   The PNB list is interpreted in INSERTION ORDER (no sort/dedupe). Bit
+ *   pnb_list[i] is paired with bit pnb_list[i + N/2]; a single fair coin
+ *   flip toggles both bits at once. If the list size is odd the middle
+ *   element is left untouched and a warning is printed.
+ *
+ * PNB file format:
+ *   Whitespace/comma-separated integers in [0, 256). The legacy footer of
+ *   three block-length counts (e.g. trailing "4, 2, 0") is stripped when
+ *   STRIP_LEGACY_FOOTER is true.
+ *
  */
 
-#include "../header/chacha.hpp" // chacha round functions
-#include <cmath>             // pow function
-#include <ctime>             // time
-#include <chrono>            // execution time duration
-#include <fstream>           // storing output in a file
-#include <future>            // multithreading
+#include "../header/chacha.hpp"
+#include "../header/attack_util.hpp"
+#include "../header/bit_ops.hpp"
+#include "../header/core_types.hpp"
+#include "../header/log_util.hpp"
+#include "../header/random_util.hpp"
+#include "../header/report_util.hpp"
+#include "../header/state_ops.hpp"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <future>
+#include <iomanip>
+#include <iostream>
+#include <limits>
 #include <sstream>
-#include <sys/time.h> // execution time started
-#include <thread>     // multithreading
+#include <string>
+#include <thread>
+#include <vector>
 
 using namespace std;
 
-config::CipherInfo basic_config;
-config::DifferentialInfo diff_config;
-config::SamplesInfo samples_config;
-chacha::PNBInfo pnb_config;
+// ------- Control Panel -------
+// #define ENABLE_LOG
+[[maybe_unused]] constexpr const char *LOG_NAME = "";
 
-double bwbias();
-bool passes_carrylock_for_pnbs(const u32 *sumstate, const u32 *dsumstate,
-                               const u32 *strdx0, const u32 *dstrdx0,
-                               const std::vector<u16> &pnbs, int key_bits);
+using TargetWord = u32;
 
-int main()
-{
-    Timer timer;
-    cout << timer.start_message();
+constexpr size_t KEY_SIZE_BITS        = 256;
+constexpr double TOTAL_ROUNDS         = 7.5;
+constexpr double DISTINGUISHING_ROUND = 4.0;
 
-    basic_config.name = "ChaCha";
-    basic_config.key_bits = 256;
-    basic_config.mode = "Backward Bias Check";
-    basic_config.total_rounds = 7.5;
+using BitPos = std::pair<u16, u16>;
+const vector<BitPos> INPUT_DIFF_BITS  = {{13, 6}};
+const vector<BitPos> OUTPUT_MASK_BITS = {{2, 0}, {8, 0}, {7, 7}};
 
-    diff_config.fwd_rounds = 4;
+const attack_util::SamplingParams SAMPLES = {
+    .samples_per_thread_ = 1ULL << 10,
+    .num_batches_        = 1ULL << 10};
 
-    diff_config.id = {{13, 6}}; // first component is the word and the other is the bit
-    diff_config.mask = {{2, 0}, {8, 0}, {7, 7}};
+const vector<u16> PNB_INLINE = {};
 
-    samples_config.samples_per_thread = 1ULL << 10;
-    samples_config.samples_per_loop = samples_config.samples_per_thread * samples_config.max_num_threads; // by default it will take one less core than all the presented core in your system
-    samples_config.total_loop_count = 1ULL << 10;
+const string   PNB_FILE_PATH       = "../harmonic_pair.txt";
+constexpr bool STRIP_LEGACY_FOOTER = true;
 
-    // ===-------------------------------------------------------------------===
-    pnb_config.pnb_file = "harmonic_pair.txt";
-    pnb_config.pnb_pattern_flag = false;
-    pnb_config.pnb_carrylock_flag = false;
-    pnb_config.pnb_syncopation_flag = false;
-    // ===-------------------------------------------------------------------===
+// ------- System Variables -------
+constexpr size_t BITS_PER_WORD = sizeof(TargetWord) * 8;
+constexpr size_t STATE_WORDS   = chacha::STATE_WORDS;
+constexpr size_t KEY_COUNT     = (KEY_SIZE_BITS == 128) ? 4 : 8;
 
-    bool success = openPNBFile(pnb_config.pnb_file, pnb_config);
+struct RoundPlan {
+  int  dist_full_rounds;
+  bool dist_half_present;
+  int  after_dist_start;
+  int  enc_full_rounds;
+  bool enc_half_present;
+};
 
-    if (!success)
-    {
-        std::cerr << "Error: Could not load PNB pattern file.\n";
-        return 1;
-    }
-
-    display::showBasicConfig(basic_config, cout);
-    display::showDiffConfig(diff_config, cout);
-    display::showSamplesConfig(samples_config, cout);
-    chacha::showPNBconfig(pnb_config, cout);
-
-    // thread portion started
-    cout << basic_config.mode << " started . . . (>>> in multi-threaded scenario . . .) \n";
-    cout << "+--------------------------------------------------------------------------------------------------------------------------------+\n";
-
-    display::printBiasHeader(cout);
-
-    vector<future<double>> future_results;
-    future_results.reserve(samples_config.max_num_threads);
-
-    double loop{0}, SUM{0}, prob, correlation;
-
-    while (loop < samples_config.total_loop_count)
-    {
-        auto loopstart = chrono::high_resolution_clock::now();
-        future_results.clear();
-        for (int i{0}; i < samples_config.max_num_threads; ++i)
-            future_results.emplace_back(async(launch::async, bwbias));
-
-        for (auto &f : future_results)
-            SUM += f.get();
-
-        prob = SUM / (++loop * (samples_config.samples_per_loop));
-        correlation = 2 * prob - 1.0;
-        auto loopend = chrono::high_resolution_clock::now();
-
-        stringstream row;
-        auto dur_milliseconds = chrono::duration_cast<chrono::milliseconds>(loopend - loopstart).count();
-        display::outputBias(loop, prob, prob - 0.5, correlation, dur_milliseconds, cout);
-    }
-
-    cout << timer.end_message();
-    return 0;
+constexpr bool half_is_even(int full_rounds) {
+  return (full_rounds + 1) % 2 == 0;
 }
 
-double bwbias()
-{
-    chacha::InitKey init_key;
+struct HarmonicPair {
+  BitPos a;
+  BitPos b;
+};
 
-    u64 threadloop{0}, thread_match_count{0};
-    u32 x0[WORD_COUNT], strdx0[WORD_COUNT], key[KEY_COUNT], dx0[WORD_COUNT], dstrdx0[WORD_COUNT], DiffState[WORD_COUNT], sumstate[WORD_COUNT], minusstate[WORD_COUNT], dsumstate[WORD_COUNT], dminusstate[WORD_COUNT];
-    u16 fwd_parity, bwd_parity, WORD, BIT;
+static RoundPlan          round_plan;
+std::vector<u16>          pnb_list;       // PNBs in file order (NOT sorted)
+std::vector<HarmonicPair> pnb_pairs;      // (pnb_list[i], pnb_list[i+half])
 
-    const int rounded_total_rounds = basic_config.roundedTotalRounds();
-    const int rounded_fwd_rounds = diff_config.roundedFwdRounds(); // fwd round is basically the round number of the distinguisher
-    const bool rounded_total_rounds_odd = (rounded_total_rounds % 2 != 0);
-    const bool rounded_fwd_rounds_odd = (rounded_fwd_rounds % 2 != 0);
-    const bool has_half = diff_config.fwdRoundsAreFractional();
+// Per-word precomputed tables for the harmonic carry-lock check.
+// pnb_bit_mask[w]   = OR of (1 << bit) for every PNB sitting in word w
+//                     (and, for a 128-bit key, in mirror word w-4 -> w).
+// pnb_min_bit[w]    = lowest PNB bit in word w, or BITS_PER_WORD if none.
+std::array<TargetWord, STATE_WORDS> pnb_bit_mask;
+std::array<u16,        STATE_WORDS> pnb_min_bit;
 
-    const int fwd_post_round = has_half ? rounded_fwd_rounds + 2 : rounded_fwd_rounds + 1;
-    const int bwd_rounds = has_half ? rounded_fwd_rounds + 1 : rounded_fwd_rounds;
+static RoundPlan make_round_plan(double total_rounds, double dist_round);
+static bool      load_pnb_file(const string &path, std::vector<u16> &out);
+static void      build_harmonic_tables();
+static bool      passes_harmonic_carrylock(const TargetWord *sumstate,
+                                           const TargetWord *dsumstate,
+                                           const TargetWord *strdx0,
+                                           const TargetWord *dstrdx0);
+double           bwbias();
 
-    while (threadloop < samples_config.samples_per_thread)
-    {
-        bwd_parity = 0;
-        while (1)
-        {
-            fwd_parity = 0;
-            chacha::init_iv_const(x0);
-            if (basic_config.key_bits == 128)
-                init_key.key_128bit(key);
-            else
-                init_key.key_256bit(key);
+int main() {
+  std::ios_base::sync_with_stdio(false);
+  cout.tie(NULL);
 
-            chacha::insert_key(x0, key);
+#ifdef ENABLE_LOG
+  gLogger.enable(*LOG_NAME ? LOG_NAME : "harmonic_run.log");
+#endif
 
-            ops::copyState(strdx0, x0);
-            ops::copyState(dx0, x0);
-            // ----------------------------------DIFF.INJECTION--------------------------------------------------------------
-            for (const auto &d : diff_config.id)
-                TOGGLE_BIT(dx0[d.first], d.second);
-            ops::copyState(dstrdx0, dx0);
-            // ---------------------------FW ROUND STARTS--------------------------------------------------------------------
-            for (int i{1}; i <= rounded_fwd_rounds; ++i)
-            {
-                frward.RoundFunction(x0, i);
-                frward.RoundFunction(dx0, i);
-            }
-            if (has_half)
-            {
-                if (rounded_fwd_rounds_odd)
-                {
-                    frward.Half_1_EvenRF(x0);
-                    frward.Half_1_EvenRF(dx0);
-                }
-                else
-                {
-                    frward.Half_1_OddRF(x0);
-                    frward.Half_1_OddRF(dx0);
-                }
-            }
+  report_util::RunTimer timer;
+  timer.print_start();
 
-            ops::xorState(DiffState, x0, dx0);
+  round_plan = make_round_plan(TOTAL_ROUNDS, DISTINGUISHING_ROUND);
 
-            for (const auto &d : diff_config.mask)
-                fwd_parity ^= GET_BIT(DiffState[d.first], d.second);
+  // PNB source is exclusive: exactly one of PNB_INLINE / PNB_FILE_PATH
+  // must be set. Both populated => ambiguous; both empty => no source.
+  const bool has_inline = !PNB_INLINE.empty();
+  const bool has_file   = !PNB_FILE_PATH.empty();
+  if (has_inline && has_file) {
+    cerr << "[ERROR] Both PNB_INLINE and PNB_FILE_PATH are set. "
+            "Provide exactly one source.\n";
+    return 1;
+  }
+  if (!has_inline && !has_file) {
+    cerr << "[ERROR] No PNB source configured. Set PNB_INLINE or "
+            "PNB_FILE_PATH.\n";
+    return 1;
+  }
 
-            if (diff_config.fwdRoundsAreFractional())
-            {
-                if (rounded_fwd_rounds_odd)
-                {
-                    frward.Half_2_EvenRF(x0);
-                    frward.Half_2_EvenRF(dx0);
-                }
-                else
-                {
-                    frward.Half_2_OddRF(x0);
-                    frward.Half_2_OddRF(dx0);
-                }
-            }
+  string pnb_source_label;
+  if (has_inline) {
+    pnb_list         = PNB_INLINE;
+    pnb_source_label = "[inline]";
+  } else {
+    if (!load_pnb_file(PNB_FILE_PATH, pnb_list))
+      return 1;
+    pnb_source_label = string("[file] ") + PNB_FILE_PATH;
+  }
 
-            for (int i{fwd_post_round}; i <= rounded_total_rounds; ++i)
-            {
-                frward.RoundFunction(x0, i);
-                frward.RoundFunction(dx0, i);
-            }
+  if (pnb_list.empty()) {
+    cerr << "[ERROR] PNB list is empty after load.\n";
+    return 1;
+  }
+  if (pnb_list.size() % 2 != 0) {
+    cerr << "[WARN] PNB count is odd (" << pnb_list.size() << "); the "
+            "middle element will not be paired for harmonic randomization.\n";
+  }
 
-            if (basic_config.totalRoundsAreFractional())
-            {
-                if (rounded_total_rounds_odd)
-                {
-                    frward.Half_1_EvenRF(x0);
-                    frward.Half_1_EvenRF(dx0);
-                }
-                else
-                {
-                    frward.Half_1_OddRF(x0);
-                    frward.Half_1_OddRF(dx0);
-                }
-            }
-            // ---------------------------FW ROUND ENDs-----------------------------------------------------------------------
+  build_harmonic_tables();
 
-            // modular addition of states
-            ops::addState(sumstate, x0, strdx0);
-            ops::addState(dsumstate, dx0, dstrdx0);
+  cout << chacha::ChaChaTraits<TargetWord>::name
+       << " Harmonic Backward Bias Check\n";
+  cout << report_util::SEP;
+  cout << "Key size                 : " << KEY_SIZE_BITS << " bits\n";
+  cout << "Word size                : " << BITS_PER_WORD << " bits\n";
+  cout << "Total rounds             : " << TOTAL_ROUNDS << "\n";
+  cout << "Distinguishing round     : " << DISTINGUISHING_ROUND << "\n";
 
-            bool carrylock_ok = passes_carrylock_for_pnbs(
-                sumstate, dsumstate, strdx0, dstrdx0,
-                pnb_config.pnbs, basic_config.key_bits);
-            if (!carrylock_ok)
-                continue;
-            break;
-        }
-
-        // randomise the PNBs
-        const size_t half = pnb_config.pnbs.size() / 2;
-        for (size_t i{0}; i < half; ++i)
-        {
-            u16 w1, b1, w2, b2;
-            chacha::calculate_word_bit(pnb_config.pnbs[i], w1, b1);
-            chacha::calculate_word_bit(pnb_config.pnbs[i + half], w2, b2);
-
-            if (RandomBoolean())
-            {
-                TOGGLE_BIT(strdx0[w1], b1);
-                TOGGLE_BIT(dstrdx0[w1], b1);
-                TOGGLE_BIT(strdx0[w2], b2);
-                TOGGLE_BIT(dstrdx0[w2], b2);
-            }
-        }
-
-        // modular subtraction of states
-        ops::minusState(minusstate, sumstate, strdx0);
-        ops::minusState(dminusstate, dsumstate, dstrdx0);
-
-        // ---------------------------BW ROUND STARTS--------------------------------------------------------------------
-        if (basic_config.totalRoundsAreFractional())
-        {
-            if (rounded_total_rounds_odd)
-            {
-                bckward.Half_2_EvenRF(minusstate);
-                bckward.Half_2_EvenRF(dminusstate);
-            }
-            else
-            {
-                bckward.Half_2_OddRF(minusstate);
-                bckward.Half_2_OddRF(dminusstate);
-            }
-        }
-        for (int i{rounded_total_rounds}; i > bwd_rounds; i--)
-        {
-            bckward.RoundFunction(minusstate, i);
-            bckward.RoundFunction(dminusstate, i);
-        }
-
-        if (diff_config.fwdRoundsAreFractional())
-        {
-            if (rounded_fwd_rounds_odd)
-            {
-                bckward.Half_1_EvenRF(minusstate);
-                bckward.Half_1_EvenRF(dminusstate);
-            }
-            else
-            {
-                bckward.Half_1_OddRF(minusstate);
-                bckward.Half_1_OddRF(dminusstate);
-            }
-        }
-        // ---------------------------BW ROUND ENDS----------------------------------------------------------------------
-
-        ops::xorState(DiffState, minusstate, dminusstate);
-
-        for (const auto &d : diff_config.mask)
-            bwd_parity ^= GET_BIT(DiffState[d.first], d.second);
-
-        if (bwd_parity == fwd_parity)
-            thread_match_count++;
-        threadloop++;
+  auto fmt_bitpos = [](const vector<BitPos> &v) -> string {
+    string s = "{";
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (i)
+        s += ", ";
+      s += "(" + to_string(v[i].first) + "," + to_string(v[i].second) + ")";
     }
-    return static_cast<double>(thread_match_count);
+    return s + "}";
+  };
+  cout << "ID bits                  : " << fmt_bitpos(INPUT_DIFF_BITS) << "\n";
+  cout << "Output mask bits         : " << fmt_bitpos(OUTPUT_MASK_BITS) << "\n";
+  cout << "Samples/batch            : 2^{" << fixed << setprecision(2)
+       << static_cast<double>(log2(SAMPLES.samples_per_batch())) << "}\n";
+  cout << "# Threads                : " << SAMPLES.max_num_threads_ << "\n";
+  cout << "# Batches                : 2^"
+       << static_cast<int>(log2(SAMPLES.num_batches_)) << "\n";
+
+  auto fmt_pnb_list = [](const vector<u16> &v) -> string {
+    string s = "{";
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (i)
+        s += ", ";
+      s += to_string(v[i]);
+    }
+    return s + "}";
+  };
+  cout << "PNB source               : " << pnb_source_label << " "
+       << fmt_pnb_list(pnb_list) << " (Count: " << pnb_list.size() << ")\n";
+
+  auto fmt_pairs = [](const vector<HarmonicPair> &v) -> string {
+    string s = "{";
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (i)
+        s += ", ";
+      s += "[(" + to_string(v[i].a.first) + "," + to_string(v[i].a.second) +
+           ")<->(" + to_string(v[i].b.first) + "," + to_string(v[i].b.second) +
+           ")]";
+    }
+    return s + "}";
+  };
+  cout << "Harmonic pairs           : " << fmt_pairs(pnb_pairs)
+       << " (Count: " << pnb_pairs.size() << ")\n";
+  cout << "Carry-lock mode          : harmonic (per-bit set + min-bit "
+          "segment >=)\n";
+
+  cout << report_util::SEP << "\n";
+
+  constexpr int W_SAMPLES = 12, W_BIAS = 23, W_CORR = 23, W_TIME = 10;
+  cout << std::left << std::setw(W_SAMPLES) << "# Samples"
+       << "  " << std::setw(W_BIAS) << "Bias (~2^)"
+       << "  " << std::setw(W_CORR) << "Correlation (~2^)"
+       << "  " << std::setw(W_TIME) << "Time(ms)"
+       << "\n"
+       << std::string(W_SAMPLES, '-') << "  " << std::string(W_BIAS, '-')
+       << "  " << std::string(W_CORR, '-') << "  " << std::string(W_TIME, '-')
+       << "\n";
+
+  vector<future<double>> future_results;
+  future_results.reserve(SAMPLES.max_num_threads_);
+
+  double SUM            = 0.0;
+  u64    samples_so_far = 0;
+
+  for (size_t batch = 0; batch < SAMPLES.num_batches_; ++batch) {
+    auto loopstart = chrono::high_resolution_clock::now();
+
+    future_results.clear();
+    for (u16 t = 0; t < SAMPLES.max_num_threads_; ++t)
+      future_results.emplace_back(async(launch::async, bwbias));
+
+    for (auto &f : future_results)
+      SUM += f.get();
+
+    samples_so_far += SAMPLES.samples_per_batch();
+    double prob        = SUM / static_cast<double>(samples_so_far);
+    double bias        = prob - 0.5;
+    double correlation = 2.0 * bias;
+
+    double bias_log2 =
+        (bias == 0.0) ? -numeric_limits<double>::infinity() : log2(fabs(bias));
+    double corr_log2 = (correlation == 0.0)
+                           ? -numeric_limits<double>::infinity()
+                           : log2(fabs(correlation));
+
+    auto loopend = chrono::high_resolution_clock::now();
+    u32  dur_ms  = static_cast<u32>(
+        chrono::duration_cast<chrono::milliseconds>(loopend - loopstart)
+            .count());
+
+    char s_samples[12], s_bias[32], s_corr[32], s_time[12];
+    snprintf(s_samples, sizeof(s_samples), "2^{%.2f}",
+             log2(static_cast<double>(samples_so_far)));
+    snprintf(s_bias, sizeof(s_bias), "%.6f ~ 2^{%.2f}", bias, bias_log2);
+    snprintf(s_corr, sizeof(s_corr), "%.6f ~ 2^{%.2f}", correlation, corr_log2);
+    snprintf(s_time, sizeof(s_time), "%u", dur_ms);
+
+    cout << std::left << std::setw(W_SAMPLES) << s_samples << "  "
+         << std::setw(W_BIAS) << s_bias << "  " << std::setw(W_CORR) << s_corr
+         << "  " << std::setw(W_TIME) << s_time << "\n";
+  }
+  cout << report_util::SEP;
+
+  timer.print_end();
+  return 0;
 }
 
-bool passes_carrylock_for_pnbs(const u32 *sumstate, const u32 *dsumstate,
-                               const u32 *strdx0, const u32 *dstrdx0,
-                               const std::vector<u16> &pnbs, int key_bits)
-{
-    bool check_mirror = (key_bits == 128);
-    std::vector<int> min_bit_by_word(WORD_COUNT, -1);
+double bwbias() {
+  u64 thread_match_count = 0;
 
-    auto bit_is_ok = [&](u16 word_idx, u16 bit)
-    {
-        return GET_BIT(sumstate[word_idx], bit) && GET_BIT(dsumstate[word_idx], bit);
-    };
+  TargetWord x0[STATE_WORDS], strdx0[STATE_WORDS], key[KEY_COUNT];
+  TargetWord dx0[STATE_WORDS], dstrdx0[STATE_WORDS], DiffState[STATE_WORDS];
+  TargetWord sumstate[STATE_WORDS], minusstate[STATE_WORDS];
+  TargetWord dsumstate[STATE_WORDS], dminusstate[STATE_WORDS];
 
-    for (u16 idx : pnbs)
-    {
-        u16 word, bit;
+  u8 fwd_parity = 0, bwd_parity = 0;
 
-        chacha::calculate_word_bit(idx, word, bit);
+  for (u64 loop = 0; loop < SAMPLES.samples_per_thread_; ++loop) {
+    bwd_parity = 0;
 
-        if (!bit_is_ok(word, bit))
-            return false;
-        if (check_mirror && !bit_is_ok(static_cast<u16>(word + 4), bit))
-            return false;
+    // Rejection loop: re-runs the forward path until the harmonic
+    // carry-lock conditions hold on (sumstate, dsumstate) wrt (strdx0,
+    // dstrdx0).
+    while (true) {
+      fwd_parity = 0;
 
-        if (min_bit_by_word[word] == -1 || bit < min_bit_by_word[word])
-            min_bit_by_word[word] = bit;
-        if (check_mirror)
-        {
-            u16 mirror_word = static_cast<u16>(word + 4);
-            if (min_bit_by_word[mirror_word] == -1 || bit < min_bit_by_word[mirror_word])
-                min_bit_by_word[mirror_word] = bit;
+      chacha::init_iv_const<TargetWord>(x0);
+
+      if constexpr (KEY_SIZE_BITS == 128)
+        chacha::init_key<4, TargetWord>(key);
+      else
+        chacha::init_key<8, TargetWord>(key);
+
+      chacha::insert_key<TargetWord>(x0, key);
+
+      state_ops::copy_state(strdx0, x0);
+      state_ops::copy_state(dx0, x0);
+
+      for (const auto &d : INPUT_DIFF_BITS)
+        dx0[d.first] ^= (static_cast<TargetWord>(1) << d.second);
+
+      state_ops::copy_state(dstrdx0, dx0);
+
+      for (int i = 1; i <= round_plan.dist_full_rounds; ++i) {
+        chacha::Forward<TargetWord>::round_function(x0, i);
+        chacha::Forward<TargetWord>::round_function(dx0, i);
+      }
+
+      if (round_plan.dist_half_present) {
+        if (half_is_even(round_plan.dist_full_rounds)) {
+          chacha::Forward<TargetWord>::half1_even(x0);
+          chacha::Forward<TargetWord>::half1_even(dx0);
+        } else {
+          chacha::Forward<TargetWord>::half1_odd(x0);
+          chacha::Forward<TargetWord>::half1_odd(dx0);
         }
+      }
+
+      state_ops::xor_state(x0, dx0, DiffState);
+      for (const auto &d : OUTPUT_MASK_BITS)
+        fwd_parity ^= ((DiffState[d.first] >> d.second) & 1U);
+
+      if (round_plan.dist_half_present) {
+        if (half_is_even(round_plan.dist_full_rounds)) {
+          chacha::Forward<TargetWord>::half2_even(x0);
+          chacha::Forward<TargetWord>::half2_even(dx0);
+        } else {
+          chacha::Forward<TargetWord>::half2_odd(x0);
+          chacha::Forward<TargetWord>::half2_odd(dx0);
+        }
+      }
+
+      for (int i = round_plan.after_dist_start; i <= round_plan.enc_full_rounds;
+           ++i) {
+        chacha::Forward<TargetWord>::round_function(x0, i);
+        chacha::Forward<TargetWord>::round_function(dx0, i);
+      }
+
+      if (round_plan.enc_half_present) {
+        if (half_is_even(round_plan.enc_full_rounds)) {
+          chacha::Forward<TargetWord>::half1_even(x0);
+          chacha::Forward<TargetWord>::half1_even(dx0);
+        } else {
+          chacha::Forward<TargetWord>::half1_odd(x0);
+          chacha::Forward<TargetWord>::half1_odd(dx0);
+        }
+      }
+
+      state_ops::add_state(x0, strdx0, sumstate);
+      state_ops::add_state(dx0, dstrdx0, dsumstate);
+
+      if (passes_harmonic_carrylock(sumstate, dsumstate, strdx0, dstrdx0))
+        break;
+    } // end rejection loop
+
+    // Harmonic-pair PNB randomization: a single coin flip toggles both
+    // members of the pair simultaneously in strdx0 and dstrdx0.
+    for (const auto &p : pnb_pairs) {
+      if (random_util::random_boolean()) {
+        const TargetWord m1 = static_cast<TargetWord>(1) << p.a.second;
+        const TargetWord m2 = static_cast<TargetWord>(1) << p.b.second;
+        strdx0[p.a.first] ^= m1;
+        dstrdx0[p.a.first] ^= m1;
+        strdx0[p.b.first] ^= m2;
+        dstrdx0[p.b.first] ^= m2;
+      }
     }
 
-    for (u16 word = 0; word < WORD_COUNT; ++word)
-    {
-        int bit = min_bit_by_word[word];
-        if (bit < 0)
-            continue;
-        if (bit == 0)
-            continue;
+    state_ops::subtract_state(sumstate, strdx0, minusstate);
+    state_ops::subtract_state(dsumstate, dstrdx0, dminusstate);
 
-        u32 seg = ops::bitSegment(sumstate[word], 0, bit - 1);
-        u32 dseg = ops::bitSegment(dsumstate[word], 0, bit - 1);
-
-        u32 strseg = ops::bitSegment(strdx0[word], 0, bit - 1);
-        u32 dstrseg = ops::bitSegment(dstrdx0[word], 0, bit - 1);
-
-        if (!((seg >= strseg) && (dseg >= dstrseg)))
-            return false;
+    if (round_plan.enc_half_present) {
+      if (half_is_even(round_plan.enc_full_rounds)) {
+        chacha::Backward<TargetWord>::half2_even(minusstate);
+        chacha::Backward<TargetWord>::half2_even(dminusstate);
+      } else {
+        chacha::Backward<TargetWord>::half2_odd(minusstate);
+        chacha::Backward<TargetWord>::half2_odd(dminusstate);
+      }
     }
 
-    return true;
+    for (int i = round_plan.enc_full_rounds; i >= round_plan.after_dist_start;
+         --i) {
+      chacha::Backward<TargetWord>::round_function(minusstate, i);
+      chacha::Backward<TargetWord>::round_function(dminusstate, i);
+    }
+
+    if (round_plan.dist_half_present) {
+      if (half_is_even(round_plan.dist_full_rounds)) {
+        chacha::Backward<TargetWord>::half1_even(minusstate);
+        chacha::Backward<TargetWord>::half1_even(dminusstate);
+      } else {
+        chacha::Backward<TargetWord>::half1_odd(minusstate);
+        chacha::Backward<TargetWord>::half1_odd(dminusstate);
+      }
+    }
+
+    state_ops::xor_state(minusstate, dminusstate, DiffState);
+    for (const auto &d : OUTPUT_MASK_BITS)
+      bwd_parity ^= ((DiffState[d.first] >> d.second) & 1U);
+
+    thread_match_count += (bwd_parity == fwd_parity);
+  }
+
+  return static_cast<double>(thread_match_count);
+}
+
+static RoundPlan make_round_plan(double total_rounds, double dist_round) {
+  RoundPlan plan{};
+
+  plan.dist_full_rounds  = static_cast<int>(dist_round);
+  plan.dist_half_present = (dist_round - plan.dist_full_rounds) > 0.0;
+  plan.after_dist_start  = plan.dist_half_present ? plan.dist_full_rounds + 2
+                                                  : plan.dist_full_rounds + 1;
+
+  plan.enc_full_rounds  = static_cast<int>(total_rounds);
+  plan.enc_half_present = (total_rounds - plan.enc_full_rounds) > 0.0;
+
+  return plan;
+}
+
+// Reads PNBs from a whitespace/comma-separated file in INSERTION order
+// (no sort, no dedupe). Validates each value lies in [0, KEY_SIZE_BITS).
+// If STRIP_LEGACY_FOOTER is true, the trailing 3 tokens (legacy block-
+// length counts) are dropped.
+static bool load_pnb_file(const string &path, std::vector<u16> &out) {
+  out.clear();
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    cerr << "[ERROR] Could not open PNB file: " << path << "\n";
+    return false;
+  }
+  std::vector<int> raw;
+  std::string      line;
+  while (std::getline(file, line)) {
+    std::replace(line.begin(), line.end(), ',', ' ');
+    std::istringstream iss(line);
+    int                v;
+    while (iss >> v)
+      raw.push_back(v);
+  }
+  if (raw.empty()) {
+    cerr << "[ERROR] PNB file " << path << " contains no values.\n";
+    return false;
+  }
+
+  size_t end = raw.size();
+  if constexpr (STRIP_LEGACY_FOOTER) {
+    if (end >= 3)
+      end -= 3;
+    else {
+      cerr << "[ERROR] PNB file " << path
+           << " has fewer than 3 tokens; cannot strip legacy footer.\n";
+      return false;
+    }
+  }
+
+  out.reserve(end);
+  for (size_t i = 0; i < end; ++i) {
+    const int v = raw[i];
+    if (v < 0 || v >= static_cast<int>(KEY_SIZE_BITS)) {
+      cerr << "[ERROR] PNB value " << v << " in " << path
+           << " is out of range [0, " << KEY_SIZE_BITS << ").\n";
+      return false;
+    }
+    out.push_back(static_cast<u16>(v));
+  }
+  return true;
+}
+
+// Pre-computes:
+//   - pnb_pairs:    (pnb_list[i], pnb_list[i+half]) as (word, bit) pairs.
+//   - pnb_bit_mask: union mask of every PNB bit, per state word
+//                   (with mirror-word entries for a 128-bit key).
+//   - pnb_min_bit:  lowest PNB bit per word, or BITS_PER_WORD if none.
+static void build_harmonic_tables() {
+  pnb_pairs.clear();
+  pnb_bit_mask.fill(0);
+  pnb_min_bit.fill(static_cast<u16>(BITS_PER_WORD));
+
+  constexpr bool key_128 = (KEY_SIZE_BITS == 128);
+
+  auto record = [&](u16 idx, u16 &out_w, u16 &out_b) {
+    u16 w = 0, b = 0;
+    chacha::calculate_word_bit<TargetWord>(idx, w, b);
+    pnb_bit_mask[w] |= (static_cast<TargetWord>(1) << b);
+    if (b < pnb_min_bit[w])
+      pnb_min_bit[w] = b;
+    if constexpr (key_128) {
+      const size_t mw = static_cast<size_t>(w) + 4;
+      if (mw < STATE_WORDS) {
+        pnb_bit_mask[mw] |= (static_cast<TargetWord>(1) << b);
+        if (b < pnb_min_bit[mw])
+          pnb_min_bit[mw] = b;
+      }
+    }
+    out_w = w;
+    out_b = b;
+  };
+
+  // Build per-bit tables (used by carry-lock check) over the entire list.
+  for (u16 idx : pnb_list) {
+    u16 w = 0, b = 0;
+    record(idx, w, b);
+  }
+
+  // Build harmonic pairs over the first half of the list.
+  const size_t half = pnb_list.size() / 2;
+  pnb_pairs.reserve(half);
+  for (size_t i = 0; i < half; ++i) {
+    u16 w1 = 0, b1 = 0, w2 = 0, b2 = 0;
+    chacha::calculate_word_bit<TargetWord>(pnb_list[i],          w1, b1);
+    chacha::calculate_word_bit<TargetWord>(pnb_list[i + half],   w2, b2);
+    pnb_pairs.push_back({BitPos{w1, b1}, BitPos{w2, b2}});
+  }
+}
+
+// Harmonic carry-lock acceptance test (see file header for definition).
+static bool passes_harmonic_carrylock(const TargetWord *sumstate,
+                                      const TargetWord *dsumstate,
+                                      const TargetWord *strdx0,
+                                      const TargetWord *dstrdx0) {
+  for (size_t w = 0; w < STATE_WORDS; ++w) {
+    const TargetWord m = pnb_bit_mask[w];
+    if (!m)
+      continue;
+
+    // (a) Every PNB bit must be set in BOTH sumstate and dsumstate.
+    if ((sumstate[w]  & m) != m) return false;
+    if ((dsumstate[w] & m) != m) return false;
+
+    // (b) Min-bit segment constraint: low pnb_min_bit[w] bits of sum*
+    //     must be >= the same segment of strd*.
+    const u16 mb = pnb_min_bit[w];
+    if (mb == 0)
+      continue;
+    const TargetWord seg_mask = (static_cast<TargetWord>(1) << mb) - 1U;
+    if ((sumstate[w]  & seg_mask) < (strdx0[w]  & seg_mask)) return false;
+    if ((dsumstate[w] & seg_mask) < (dstrdx0[w] & seg_mask)) return false;
+  }
+  return true;
 }

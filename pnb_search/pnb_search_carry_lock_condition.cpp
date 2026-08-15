@@ -1,129 +1,187 @@
 /*
+ * Filename: pnb_search_carry_lock_condition.cpp
  *
  * Synopsis:
- * This file contains the PNB searching programe using carry-lock for the stream cipher ChaCha
- * 
- * CLI:
- *   g++ -std=c++2c -O3 filename.cpp -o output && ./output nm log
+ * Multi-threaded PNB (Probabilistic Neutral Bits) search for ChaCha with a
+ * per-bit CARRY-LOCK rejection. For each candidate key bit (key_word,
+ * key_bit), the forward path is rerun until the carry-lock conditions hold
+ * for that single bit position:
+ *   (1) bit `key_bit` of sumstate[w]  is set
+ *   (2) bit `key_bit` of dsumstate[w] is set
+ *   (3) (sumstate[w]  mod 2^key_bit) >= (strdx0[w]  mod 2^key_bit)
+ *   (4) (dsumstate[w] mod 2^key_bit) >= (dstrdx0[w] mod 2^key_bit)
+ * where w = key_word + chacha::KEY_START. Conditions (3) and (4) are
+ * skipped when key_bit == 0. For a 128-bit key the same four checks are
+ * additionally enforced on the mirror word w + 4 (the duplicated half).
+ * After acceptance the key bit is flipped, modular subtraction yields
+ * minusstate, the backward path is run, and parity match is counted.
  *
- * Needs: commonfiles.hpp, chacha.hpp
+ *
+ * CLI:
+ *   ./pnb_search_carry_lock_condition [neutrality_threshold]
+ *   Example: ./pnb_search_carry_lock_condition 0.0
  */
 
-#include "../header/chacha.hpp" // chacha round functions
-#include <cmath>             // pow function
-#include <ctime>             // time
-#include <fstream>           // storing output in a file
-#include <future>            // multithreading
+#include "../header/attack_util.hpp"
+#include "../header/chacha.hpp"
+#include "../header/core_types.hpp"
+#include "../header/report_util.hpp"
+#include "../header/state_ops.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <future>
+#include <iomanip>
+#include <iostream>
 #include <sstream>
-#include <thread> // multithreading
+#include <thread>
+#include <vector>
 
 using namespace std;
 
-config::CipherInfo basic_config;
-config::DifferentialInfo diff_config;
-config::SamplesInfo samples_config;
-chacha::PNBInfo pnb_config;
+// --------- Control Panel ---------
+using TargetWord = u32;
+
+constexpr size_t KEY_SIZE_BITS        = 256;
+constexpr double TOTAL_ROUNDS         = 7.5;
+constexpr double DISTINGUISHING_ROUND = 4.5;
+
+using BitPos = std::pair<u16, u16>;
+const vector<BitPos> INPUT_DIFF_BITS  = {{13, 6}};
+// const vector<BitPos> OUTPUT_MASK_BITS = {{2, 0}, {8, 0}, {7, 7}};
+const vector<BitPos> OUTPUT_MASK_BITS = {{2, 0}, {6, 12}, {7, 19}, {8,0}, {10,0},{11,7}, {12,0}};
+
+const attack_util::SamplingParams SAMPLES = {
+    .samples_per_thread_ = 1ULL << 17};
+
+constexpr double DEFAULT_NEUTRALITY_THRESHOLD = 0.0;
+
+vector<u16> SKIP_KEY_BITS = {};
+
+// ------- System Variables -------
+constexpr size_t BITS_PER_WORD = sizeof(TargetWord) * 8;
+constexpr size_t STATE_WORDS   = chacha::STATE_WORDS;
+constexpr size_t KEY_COUNT     = (KEY_SIZE_BITS == 128) ? 4 : 8;
+constexpr size_t KEY_BUF_WORDS = 8; // ChaCha key buffer is always 8 words
 
 using BiasEntry = pair<u16, double>;
 
-bool passes_carrylock(const u32 *sumstate, const u32 *dsumstate,
-                      const u32 *strdx0, const u32 *dstrdx0,
-                      int key_word, int key_bit, bool check_mirror);
-double matchcount(int key_bit, int key_word);
+struct RoundPlan
+{
+    int  dist_full_rounds;
+    bool dist_half_present;
+    int  after_dist_start;
+    int  enc_full_rounds;
+    bool enc_half_present;
+};
 
-// ---------------- main function -----------------
+constexpr bool half_is_even(int full_rounds)
+{
+    return (full_rounds + 1) % 2 == 0;
+}
+
+double                                  active_neutrality_threshold = DEFAULT_NEUTRALITY_THRESHOLD;
+static atomic<u64>                      progress{0};
+static chrono::steady_clock::time_point progress_start;
+static RoundPlan                        round_plan;
+
+static RoundPlan make_round_plan(double total_rounds, double dist_round);
+double           matchcount(int key_bit, int key_word);
+inline bool      skip_this(u16 idx, const vector<u16> &skip_bits);
+static void      print_progress(u64 done, u64 total);
+static inline bool passes_carrylock(const TargetWord *sumstate,
+                                    const TargetWord *dsumstate,
+                                    const TargetWord *strdx0,
+                                    const TargetWord *dstrdx0,
+                                    int key_word, int key_bit,
+                                    bool check_mirror);
+
 int main(int argc, char *argv[])
 {
-    bool log_to_file = false;
+    std::ios_base::sync_with_stdio(false);
+    cout.tie(NULL);
+
+    report_util::RunTimer timer;
+    timer.print_start();
 
     if (argc >= 2)
     {
         try
         {
-            pnb_config.neutrality_measure = std::stod(argv[1]);
-            if (pnb_config.neutrality_measure < 0.0 || pnb_config.neutrality_measure > 1.0)
+            active_neutrality_threshold = std::stod(argv[1]);
+            if (active_neutrality_threshold < 0.0 || active_neutrality_threshold > 1.0)
             {
-                std::cerr << "Neutrality must be in [0,1]. Using default 0.0.\n";
-                pnb_config.neutrality_measure = 0.0;
+                cerr << "Neutrality must be in [0,1]. Using default.\n";
+                active_neutrality_threshold = DEFAULT_NEUTRALITY_THRESHOLD;
             }
         }
         catch (...)
         {
-            std::cerr << "Invalid neutrality input. Using default 0.0.\n";
-            pnb_config.neutrality_measure = 0.0;
+            cerr << "Invalid neutrality input. Using default.\n";
+            active_neutrality_threshold = DEFAULT_NEUTRALITY_THRESHOLD;
         }
     }
 
-    if (argc >= 3)
+    round_plan = make_round_plan(TOTAL_ROUNDS, DISTINGUISHING_ROUND);
+
+    std::sort(SKIP_KEY_BITS.begin(), SKIP_KEY_BITS.end());
+    const u64 total_work =
+        KEY_COUNT * BITS_PER_WORD - static_cast<u16>(SKIP_KEY_BITS.size());
+
+    cout << chacha::ChaChaTraits<TargetWord>::name
+         << " PNB Search (carry-lock conditions)\n";
+    cout << report_util::SEP;
+    cout << "Key size                 : " << KEY_SIZE_BITS << " bits\n";
+    cout << "Word size                : " << BITS_PER_WORD << " bits\n";
+    cout << "Total rounds             : " << TOTAL_ROUNDS << "\n";
+    cout << "Distinguishing round     : " << DISTINGUISHING_ROUND << "\n";
+
+    auto fmt_bitpos = [](const vector<BitPos> &v) -> string
     {
-        std::string flag = argv[2];
-        if (flag == "log" || flag == "LOG" || flag == "1")
-            log_to_file = true;
-        else
-            log_to_file = false;
-    }
-
-    Timer timer;
-
-    stringstream dmsg; //  log buffer
-
-    dmsg << timer.start_message();
-
-    // ---------------- config -----------------
-    basic_config.name = "ChaCha";
-    basic_config.key_bits = 128;
-    basic_config.total_rounds = 7;
-
-    diff_config.fwd_rounds = 4;
-    diff_config.id = {{13, 6}};
-    diff_config.mask = {{2, 0}, {8, 0}, {7, 7}};
-
-    samples_config.samples_per_thread = 1ULL << 17;
-    samples_config.samples_per_loop =
-        samples_config.samples_per_thread * samples_config.max_num_threads;
-
-    size_t key_count =
-        (basic_config.key_bits == 128) ? KEY_COUNT - 4 : KEY_COUNT;
-
-    pnb_config.pnb_search_flag = true;
-
-    display::showBasicConfig(basic_config, dmsg);
-    display::showDiffConfig(diff_config, dmsg);
-    display::showSamplesConfig(samples_config, dmsg);
-    chacha::showPNBconfig(pnb_config, dmsg);
-
-    cout << dmsg.str();
-    // ---------------- config end -----------------
-
-    vector<BiasEntry> all_pnbs;
-    vector<BiasEntry> all_nonpnbs;
-
-    vector<BiasEntry> temp_pnb;
-    vector<BiasEntry> temp_non_pnb;
-
-    all_pnbs.reserve(256);
-    all_nonpnbs.reserve(256);
-    temp_pnb.reserve(256);
-    temp_non_pnb.reserve(256);
-
-    double sum, bias;
-
-    vector<std::future<double>> future_results;
-    future_results.reserve(samples_config.max_num_threads);
-
-    // ---------------- key-word / key-bit loop -----------------
-    for (size_t key_word{0}; key_word < key_count; ++key_word)
-    {
-        for (size_t key_bit{0}; key_bit < WORD_SIZE; key_bit++)
+        string s = "{";
+        for (size_t i = 0; i < v.size(); ++i)
         {
-            u16 global_idx = static_cast<u16>(key_word * WORD_SIZE + key_bit);
+            if (i) s += ", ";
+            s += "(" + to_string(v[i].first) + "," + to_string(v[i].second) + ")";
+        }
+        return s + "}";
+    };
+    cout << "ID bits                  : " << fmt_bitpos(INPUT_DIFF_BITS) << "\n";
+    cout << "Output mask bits         : " << fmt_bitpos(OUTPUT_MASK_BITS) << "\n";
+    cout << "Samples/key-bit          : 2^{" << fixed << setprecision(2)
+         << static_cast<double>(log2(SAMPLES.samples_per_batch())) << "}\n";
+    cout << "# Threads                : " << SAMPLES.max_num_threads_ << "\n";
+    cout << "Neutrality threshold     : " << active_neutrality_threshold << "\n";
+    cout << "# key bits               : " << total_work << "\n";
+    cout << "Mode                     : carry-lock (rejection sampling on +/-)"
+         << "\n";
+    cout << report_util::SEP << "\n";
 
-            sum = 0.0;
+    progress_start = chrono::steady_clock::now();
+    vector<BiasEntry> all_pnbs, all_nonpnbs;
+    all_pnbs.reserve(KEY_SIZE_BITS);
+    all_nonpnbs.reserve(KEY_SIZE_BITS);
+
+    vector<future<double>> future_results;
+    future_results.reserve(SAMPLES.max_num_threads_);
+
+    for (size_t key_word{0}; key_word < KEY_COUNT; ++key_word)
+    {
+        for (size_t key_bit{0}; key_bit < BITS_PER_WORD; ++key_bit)
+        {
+            u16 global_idx = static_cast<u16>(key_word * BITS_PER_WORD + key_bit);
+            if (skip_this(global_idx, SKIP_KEY_BITS))
+                continue;
+
+            double sum = 0.0;
             future_results.clear();
 
-            // ---------------- launch threads for this (key_word, key_bit) -----------------
-            for (u16 thread_number{0}; thread_number < samples_config.max_num_threads; ++thread_number)
-                future_results.emplace_back(async(launch::async, matchcount, static_cast<int>(key_bit), static_cast<int>(key_word)));
+            for (u16 t{0}; t < SAMPLES.max_num_threads_; ++t)
+                future_results.emplace_back(async(launch::async, matchcount,
+                                                  static_cast<int>(key_bit),
+                                                  static_cast<int>(key_word)));
 
             try
             {
@@ -135,360 +193,285 @@ int main(int argc, char *argv[])
                 cerr << "Thread error: " << e.what() << "\n";
             }
 
-            // samples_per_loop = samples_per_thread * max_num_threads
-            bias = (2.0 * sum / static_cast<double>(samples_config.samples_per_loop)) - 1.0;
+            double neutrality_corr =
+                (2.0 * static_cast<double>(sum) / SAMPLES.samples_per_batch()) - 1.0;
 
-            if (std::fabs(bias) >= pnb_config.neutrality_measure)
-                temp_pnb.push_back({global_idx, bias});
+            if (fabs(neutrality_corr) >= active_neutrality_threshold)
+                all_pnbs.push_back({global_idx, neutrality_corr});
             else
-                temp_non_pnb.push_back({global_idx, bias});
+                all_nonpnbs.push_back({global_idx, neutrality_corr});
+
+            progress.fetch_add(1, memory_order_relaxed);
+            print_progress(progress.load(), total_work);
         }
-
-        for (auto &l : temp_pnb)
-            all_pnbs.push_back(l);
-
-        for (auto &l : temp_non_pnb)
-            all_nonpnbs.push_back(l);
-
-        temp_pnb.clear();
-        temp_non_pnb.clear();
     }
+    cerr << "\n";
 
-    // ---------------- deduplicate + sort PNB and non-PNB lists -----------------
     auto sort_by_index = [](auto &v)
     {
-        std::sort(v.begin(), v.end(),
-                  [](const auto &a, const auto &b)
-                  { return a.first < b.first; });
-        v.erase(std::unique(v.begin(), v.end(),
-                            [](const auto &x, const auto &y)
-                            { return x.first == y.first; }),
+        sort(v.begin(), v.end(),
+             [](const auto &a, const auto &b) { return a.first < b.first; });
+        v.erase(unique(v.begin(), v.end(),
+                       [](const auto &x, const auto &y) { return x.first == y.first; }),
                 v.end());
     };
-
     sort_by_index(all_pnbs);
     sort_by_index(all_nonpnbs);
 
-    std::vector<u16> pnbs_sorted_by_index;
-    pnbs_sorted_by_index.reserve(all_pnbs.size());
-    for (auto &e : all_pnbs)
-        pnbs_sorted_by_index.push_back(e.first);
-
-    cout << "\n";
-    cout << pnbs_sorted_by_index.size() << " PNBs (sorted by index):\n{";
-    for (std::size_t i{0}; i < pnbs_sorted_by_index.size(); ++i)
-    {
-        cout << pnbs_sorted_by_index[i];
-        if (i + 1 != pnbs_sorted_by_index.size())
-            cout << ", ";
-    }
+    cout << all_pnbs.size() << " PNBs (sorted by index):\n{";
+    for (size_t i = 0; i < all_pnbs.size(); ++i)
+        cout << all_pnbs[i].first << (i + 1 != all_pnbs.size() ? ", " : "");
     cout << "}\n";
-    cout << "\n";
 
-    // ---------------- save log (if enabled) -----------------
-    if (log_to_file)
-    {
-        // PNB sorted by |bias| (descending)
-        std::vector<std::pair<u16, double>> pnbs_sorted_by_bias = all_pnbs;
-        std::sort(pnbs_sorted_by_bias.begin(), pnbs_sorted_by_bias.end(),
-                  [](const auto &a, const auto &b)
-                  {
-                      return std::fabs(a.second) > std::fabs(b.second);
-                  });
-
-        // non-PNB sorted by index
-        std::vector<u16> nonpnbs_sorted_by_index;
-        nonpnbs_sorted_by_index.reserve(all_nonpnbs.size());
-        for (auto &e : all_nonpnbs)
-            nonpnbs_sorted_by_index.push_back(e.first);
-
-        // per-bit biases (size = 256 always)
-        std::vector<double> bias_per_bit(256, 0.0);
-        for (auto &e : all_pnbs)
-            bias_per_bit[e.first] = e.second;
-        for (auto &e : all_nonpnbs)
-            bias_per_bit[e.first] = e.second;
-
-        auto append_index_list = [&](const std::string &label, const std::vector<u16> &list)
-        {
-            dmsg << "\n"
-                 << label << " (" << list.size() << "):\n{";
-            for (std::size_t i{0}; i < list.size(); ++i)
-            {
-                dmsg << list[i];
-                if (i + 1 != list.size())
-                    dmsg << ", ";
-            }
-            dmsg << "}\n";
-        };
-
-        auto append_bias_list = [&](const std::string &label, const std::vector<std::pair<u16, double>> &list)
-        {
-            dmsg << "\n"
-                 << label << " (" << list.size() << "):\n{";
-            for (std::size_t i{0}; i < list.size(); ++i)
-            {
-                dmsg << list[i].first << ":" << list[i].second;
-                if (i + 1 != list.size())
-                    dmsg << ", ";
-            }
-            dmsg << "}\n";
-        };
-
-        append_index_list("PNBs sorted by index", pnbs_sorted_by_index);
-        append_bias_list("PNBs sorted by |bias|", pnbs_sorted_by_bias);
-        append_index_list("Non-PNBs sorted by index", nonpnbs_sorted_by_index);
-
-        dmsg << "\nBias per bit (index: bias):\n{";
-        for (std::size_t i{0}; i < bias_per_bit.size(); ++i)
-        {
-            dmsg << i << ":" << bias_per_bit[i];
-            if (i + 1 != bias_per_bit.size())
-                dmsg << ", ";
-        }
-        dmsg << "}\n";
-
-        dmsg << timer.end_message();
-
-        // ---------------- save file -----------------
-        std::ostringstream filename;
-        filename << "pnb_search_" << basic_config.name << "_" << basic_config.key_bits
-                 << "_r" << basic_config.total_rounds << "_f" << diff_config.fwd_rounds
-                 << ".log";
-        std::ofstream fout(filename.str());
-        if (fout.is_open())
-        {
-            fout << dmsg.str();
-            fout.close();
-            std::cout << "Log saved to: " << filename.str() << "\n";
-        }
-        else
-        {
-            std::cerr << "ERROR: Could not write log file: " << filename.str() << "\n";
-        }
-    }
-
-    cout << timer.end_message();
+    timer.print_end();
     return 0;
 }
 
-bool passes_carrylock(const u32 *sumstate, const u32 *dsumstate,
-                      const u32 *strdx0, const u32 *dstrdx0,
-                      int key_word, int key_bit, bool check_mirror)
-{
-    u16 word = static_cast<u16>(key_word + 4);
-    u16 mirror_word = static_cast<u16>(word + 4);
-
-    auto check_word = [&](u16 word_idx)
-    {
-        bool bit1 = GET_BIT(sumstate[word_idx], key_bit);
-        bool bit2 = GET_BIT(dsumstate[word_idx], key_bit);
-
-        if (!key_bit)
-            return bit1 && bit2;
-
-        u32 seg = ops::bitSegment(sumstate[word_idx], 0, key_bit - 1);
-        u32 dseg = ops::bitSegment(dsumstate[word_idx], 0, key_bit - 1);
-
-        u32 strseg = ops::bitSegment(strdx0[word_idx], 0, key_bit - 1);
-        u32 dstrseg = ops::bitSegment(dstrdx0[word_idx], 0, key_bit - 1);
-
-        bool w1 = (seg >= strseg) && (dseg >= dstrseg);
-
-        return w1 && bit1 && bit2;
-    };
-
-    if (!check_word(word))
-        return false;
-    if (check_mirror)
-        return check_word(mirror_word);
-    return true;
-}
-
-// ---------------- worker: match count for one (key_word, key_bit) -----------------
 double matchcount(int key_bit, int key_word)
 {
-    chacha::InitKey init_key;
-    u64 thread_match_count{0};
+    u64 thread_match_count = 0;
 
-    u32 x0[WORD_COUNT], strdx0[WORD_COUNT], key[KEY_COUNT],
-        dx0[WORD_COUNT], dstrdx0[WORD_COUNT],
-        DiffState[WORD_COUNT], sumstate[WORD_COUNT],
-        minusstate[WORD_COUNT], dsumstate[WORD_COUNT],
-        dminusstate[WORD_COUNT];
+    TargetWord x0[STATE_WORDS],     strdx0[STATE_WORDS],     key[KEY_BUF_WORDS];
+    TargetWord dx0[STATE_WORDS],    dstrdx0[STATE_WORDS],    DiffState[STATE_WORDS];
+    TargetWord sumstate[STATE_WORDS],  minusstate[STATE_WORDS];
+    TargetWord dsumstate[STATE_WORDS], dminusstate[STATE_WORDS];
 
-    u8 fwd_parity, bwd_parity;
+    u8 fwd_parity = 0, bwd_parity = 0;
 
-    const int rounded_total_rounds = basic_config.roundedTotalRounds();
-    const int rounded_fwd_rounds = diff_config.roundedFwdRounds();
-    const bool rounded_total_rounds_are_odd = (rounded_total_rounds % 2 != 0);
-    const bool rounded_fwd_rounds_are_odd = (rounded_fwd_rounds % 2 != 0);
-    const bool fwd_rounds_are_fractional = diff_config.fwdRoundsAreFractional();
+    constexpr bool check_mirror = (KEY_SIZE_BITS == 128);
 
-    int fwd_post_round =
-        fwd_rounds_are_fractional ? rounded_fwd_rounds + 2 : rounded_fwd_rounds + 1;
-    int bwd_round =
-        fwd_rounds_are_fractional ? rounded_fwd_rounds + 1 : rounded_fwd_rounds;
-
-    size_t spt = samples_config.samples_per_thread;
-
-    for (size_t loop{0}; loop < spt; ++loop)
+    for (size_t loop = 0; loop < SAMPLES.samples_per_thread_; ++loop)
     {
         bwd_parity = 0;
 
+        // Rejection loop: rerun the forward path until the carry-lock
+        // conditions on (key_word, key_bit) are satisfied.
         while (true)
         {
             fwd_parity = 0;
 
-            // ---------------- ChaCha setup -----------------
-            chacha::init_iv_const(x0);
-            if (basic_config.key_bits == 128)
-                init_key.key_128bit(key);
+            chacha::init_iv_const<TargetWord>(x0);
+
+            if constexpr (KEY_SIZE_BITS == 128)
+                chacha::init_key<4, TargetWord>(key);
             else
-                init_key.key_256bit(key);
+                chacha::init_key<8, TargetWord>(key);
 
-            chacha::insert_key(x0, key);
+            chacha::insert_key<TargetWord>(x0, key);
 
-            ops::copyState(strdx0, x0);
-            ops::copyState(dx0, x0);
+            state_ops::copy_state(strdx0, x0);
+            state_ops::copy_state(dx0,    x0);
 
-            // ---------------- inject diff -----------------
-            for (const auto &d : diff_config.id)
-                TOGGLE_BIT(dx0[d.first], d.second);
-            ops::copyState(dstrdx0, dx0);
+            for (const auto &d : INPUT_DIFF_BITS)
+                dx0[d.first] ^= (static_cast<TargetWord>(1) << d.second);
 
-            // ---------------- forward round -----------------
-            for (int i{1}; i <= rounded_fwd_rounds; ++i)
+            state_ops::copy_state(dstrdx0, dx0);
+
+            for (int i = 1; i <= round_plan.dist_full_rounds; ++i)
             {
-                frward.RoundFunction(x0, i);
-                frward.RoundFunction(dx0, i);
+                chacha::Forward<TargetWord>::round_function(x0,  i);
+                chacha::Forward<TargetWord>::round_function(dx0, i);
             }
-            if (fwd_rounds_are_fractional)
+
+            if (round_plan.dist_half_present)
             {
-                if (rounded_fwd_rounds_are_odd)
+                if (half_is_even(round_plan.dist_full_rounds))
                 {
-                    frward.Half_1_EvenRF(x0);
-                    frward.Half_1_EvenRF(dx0);
+                    chacha::Forward<TargetWord>::apply_even_arx(x0, 2);
+                    chacha::Forward<TargetWord>::apply_even_arx(dx0, 2);
                 }
                 else
                 {
-                    frward.Half_1_OddRF(x0);
-                    frward.Half_1_OddRF(dx0);
+                    chacha::Forward<TargetWord>::apply_odd_arx(x0, 2);
+                    chacha::Forward<TargetWord>::apply_odd_arx(dx0, 2);
                 }
             }
 
-            // ---------------- XOR state -----------------
-            ops::xorState(DiffState, x0, dx0);
+            state_ops::xor_state(x0, dx0, DiffState);
+            for (const auto &d : OUTPUT_MASK_BITS)
+                fwd_parity ^= ((DiffState[d.first] >> d.second) & 1U);
 
-            // ---------------- store forward parity -----------------
-            for (const auto &d : diff_config.mask)
-                fwd_parity ^= GET_BIT(DiffState[d.first], d.second);
-
-            // ---------------- forward round -----------------
-            if (fwd_rounds_are_fractional)
+            if (round_plan.dist_half_present)
             {
-                if (rounded_fwd_rounds_are_odd)
+                if (half_is_even(round_plan.dist_full_rounds))
                 {
-                    frward.Half_2_EvenRF(x0);
-                    frward.Half_2_EvenRF(dx0);
+                    chacha::Forward<TargetWord>::finish_even_arx(x0, 2);
+                    chacha::Forward<TargetWord>::finish_even_arx(dx0, 2);
                 }
                 else
                 {
-                    frward.Half_2_OddRF(x0);
-                    frward.Half_2_OddRF(dx0);
+                    chacha::Forward<TargetWord>::finish_odd_arx(x0, 2);
+                    chacha::Forward<TargetWord>::finish_odd_arx(dx0, 2);
                 }
             }
 
-            for (int i{fwd_post_round}; i <= rounded_total_rounds; ++i)
+            for (int i = round_plan.after_dist_start; i <= round_plan.enc_full_rounds; ++i)
             {
-                frward.RoundFunction(x0, i);
-                frward.RoundFunction(dx0, i);
+                chacha::Forward<TargetWord>::round_function(x0,  i);
+                chacha::Forward<TargetWord>::round_function(dx0, i);
             }
 
-            if (basic_config.totalRoundsAreFractional())
+            if (round_plan.enc_half_present)
             {
-                if (rounded_total_rounds_are_odd)
+                if (half_is_even(round_plan.enc_full_rounds))
                 {
-                    frward.Half_1_EvenRF(x0);
-                    frward.Half_1_EvenRF(dx0);
+                    chacha::Forward<TargetWord>::apply_even_arx(x0, 2);
+                    chacha::Forward<TargetWord>::apply_even_arx(dx0, 2);
                 }
                 else
                 {
-                    frward.Half_1_OddRF(x0);
-                    frward.Half_1_OddRF(dx0);
+                    chacha::Forward<TargetWord>::apply_odd_arx(x0, 2);
+                    chacha::Forward<TargetWord>::apply_odd_arx(dx0, 2);
                 }
             }
-            // ---------------- forward round end -----------------
 
-            // ---------------- Z = X + X^R -----------------
-            ops::addState(sumstate, x0, strdx0);
-            ops::addState(dsumstate, dx0, dstrdx0);
+            state_ops::add_state(x0,  strdx0,  sumstate);
+            state_ops::add_state(dx0, dstrdx0, dsumstate);
 
-            // ---------------- carry-lock gate -----------------
-            if (passes_carrylock(
-                    sumstate, dsumstate, strdx0, dstrdx0,
-                    key_word, key_bit, basic_config.key_bits == 128))
+            if (passes_carrylock(sumstate, dsumstate, strdx0, dstrdx0,
+                                 key_word, key_bit, check_mirror))
                 break;
-        }
-        // ---------------- flip key bit -----------------
-        TOGGLE_BIT(key[key_word], key_bit);
-        if (basic_config.key_bits == 128)
-            TOGGLE_BIT(key[key_word + 4], key_bit);
+        } // end rejection loop
 
-        // ---------------- make new X and X' with altered key bits -----------------
-        chacha::insert_key(strdx0, key);
-        chacha::insert_key(dstrdx0, key);
+        key[key_word] ^= (static_cast<TargetWord>(1) << key_bit);
+        if constexpr (KEY_SIZE_BITS == 128)
+            key[key_word + 4] ^= (static_cast<TargetWord>(1) << key_bit);
 
-        // ---------------- Z = X - X^R -----------------
-        ops::minusState(minusstate, sumstate, strdx0);
-        ops::minusState(dminusstate, dsumstate, dstrdx0);
+        chacha::insert_key<TargetWord>(strdx0,  key);
+        chacha::insert_key<TargetWord>(dstrdx0, key);
 
-        // ---------------- backward round -----------------
-        if (basic_config.totalRoundsAreFractional())
+        state_ops::subtract_state(sumstate,  strdx0,  minusstate);
+        state_ops::subtract_state(dsumstate, dstrdx0, dminusstate);
+
+        if (round_plan.enc_half_present)
         {
-            if (rounded_total_rounds_are_odd)
+            if (half_is_even(round_plan.enc_full_rounds))
             {
-                bckward.Half_2_EvenRF(minusstate);
-                bckward.Half_2_EvenRF(dminusstate);
+                chacha::Backward<TargetWord>::apply_even_arx(minusstate, 2);
+                chacha::Backward<TargetWord>::apply_even_arx(dminusstate, 2);
             }
             else
             {
-                bckward.Half_2_OddRF(minusstate);
-                bckward.Half_2_OddRF(dminusstate);
+                chacha::Backward<TargetWord>::apply_odd_arx(minusstate, 2);
+                chacha::Backward<TargetWord>::apply_odd_arx(dminusstate, 2);
             }
         }
-        for (int i{rounded_total_rounds}; i > bwd_round; i--)
+
+        for (int i = round_plan.enc_full_rounds; i >= round_plan.after_dist_start; --i)
         {
-            bckward.RoundFunction(minusstate, i);
-            bckward.RoundFunction(dminusstate, i);
+            chacha::Backward<TargetWord>::round_function(minusstate,  i);
+            chacha::Backward<TargetWord>::round_function(dminusstate, i);
         }
 
-        if (fwd_rounds_are_fractional)
+        if (round_plan.dist_half_present)
         {
-            if (rounded_fwd_rounds_are_odd)
+            if (half_is_even(round_plan.dist_full_rounds))
             {
-                bckward.Half_1_EvenRF(minusstate);
-                bckward.Half_1_EvenRF(dminusstate);
+                chacha::Backward<TargetWord>::finish_even_arx(minusstate, 2);
+                chacha::Backward<TargetWord>::finish_even_arx(dminusstate, 2);
             }
             else
             {
-                bckward.Half_1_OddRF(minusstate);
-                bckward.Half_1_OddRF(dminusstate);
+                chacha::Backward<TargetWord>::finish_odd_arx(minusstate, 2);
+                chacha::Backward<TargetWord>::finish_odd_arx(dminusstate, 2);
             }
         }
-        // ---------------- backward round end -----------------
 
-        // ---------------- XOR state -----------------
-        ops::xorState(DiffState, minusstate, dminusstate);
+        state_ops::xor_state(minusstate, dminusstate, DiffState);
+        for (const auto &d : OUTPUT_MASK_BITS)
+            bwd_parity ^= ((DiffState[d.first] >> d.second) & 1U);
 
-        // ---------------- store backward parity -----------------
-        for (const auto &d : diff_config.mask)
-            bwd_parity ^= GET_BIT(DiffState[d.first], d.second);
-
-        // ---------------- parity check -----------------
-        if (fwd_parity == bwd_parity)
-            thread_match_count++;
+        thread_match_count += (fwd_parity == bwd_parity);
     }
 
     return static_cast<double>(thread_match_count);
+}
+
+inline bool skip_this(u16 idx, const vector<u16> &skip_bits)
+{
+    return binary_search(skip_bits.begin(), skip_bits.end(), idx);
+}
+
+static RoundPlan make_round_plan(double total_rounds, double dist_round)
+{
+    RoundPlan plan{};
+
+    plan.dist_full_rounds  = static_cast<int>(dist_round);
+    plan.dist_half_present = (dist_round - plan.dist_full_rounds) > 0.0;
+    plan.after_dist_start  = plan.dist_half_present
+                                 ? plan.dist_full_rounds + 2
+                                 : plan.dist_full_rounds + 1;
+
+    plan.enc_full_rounds  = static_cast<int>(total_rounds);
+    plan.enc_half_present = (total_rounds - plan.enc_full_rounds) > 0.0;
+
+    return plan;
+}
+
+// Per-bit carry-lock acceptance test for the (key_word, key_bit) under
+// measurement. See the file-level synopsis for the four conditions per
+// word; the mirror word w + 4 is checked when check_mirror is true.
+static inline bool passes_carrylock(const TargetWord *sumstate,
+                                    const TargetWord *dsumstate,
+                                    const TargetWord *strdx0,
+                                    const TargetWord *dstrdx0,
+                                    int key_word, int key_bit,
+                                    bool check_mirror)
+{
+    const u16        word        = static_cast<u16>(key_word + chacha::KEY_START);
+    const u16        mirror_word = static_cast<u16>(word + 4);
+    const TargetWord bit_mask    = static_cast<TargetWord>(1) << key_bit;
+    const TargetWord seg_mask    = (key_bit == 0)
+                                       ? static_cast<TargetWord>(0)
+                                       : static_cast<TargetWord>(
+                                             (static_cast<TargetWord>(1) << key_bit) - 1);
+
+    auto check_word = [&](u16 wi) -> bool
+    {
+        if (!(sumstate[wi]  & bit_mask)) return false;
+        if (!(dsumstate[wi] & bit_mask)) return false;
+        if (key_bit == 0) return true;
+        if ((sumstate[wi]  & seg_mask) < (strdx0[wi]  & seg_mask)) return false;
+        if ((dsumstate[wi] & seg_mask) < (dstrdx0[wi] & seg_mask)) return false;
+        return true;
+    };
+
+    if (!check_word(word)) return false;
+    if (check_mirror && mirror_word < STATE_WORDS)
+        return check_word(mirror_word);
+    return true;
+}
+
+static void print_progress(u64 done, u64 total)
+{
+    constexpr int BAR_WIDTH = 40;
+    double frac    = static_cast<double>(done) / static_cast<double>(total);
+    int    filled  = static_cast<int>(frac * BAR_WIDTH);
+    auto   now     = chrono::steady_clock::now();
+    double elapsed = chrono::duration<double>(now - progress_start).count();
+
+    cerr << "\r[";
+    for (int i = 0; i < BAR_WIDTH; ++i)
+        cerr << (i < filled ? '#' : '.');
+    cerr << "] " << done << "/" << total;
+
+    auto fmt_hms = [](int s) -> string
+    {
+        ostringstream os;
+        os << setfill('0') << setw(2) << s / 3600
+           << "h" << setw(2) << (s % 3600) / 60
+           << "m" << setw(2) << s % 60 << "s";
+        return os.str();
+    };
+
+    if (done > 0 && done < total)
+    {
+        int eta_s = static_cast<int>(elapsed / frac - elapsed);
+        cerr << "  ETA " << fmt_hms(eta_s);
+    }
+    else if (done == total)
+    {
+        cerr << "  Done in " << fmt_hms(static_cast<int>(elapsed));
+    }
+    cerr << flush;
 }

@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Compiled binaries
+a.out
+*.o
+
+# Editor
+.vscode/
+
+# Manuscript (not part of the review artefact)
+indocrypt/

@@ -1,804 +1,363 @@
 /*
- * REFERENCE IMPLEMENTATION OF chacha cipher round function header file
+ * REFERENCE IMPLEMENTATION OF ChaCha (Unified Traits Framework)
  *
- *
- *
- *
+ * Filename: chacha.hpp
  *
  * Synopsis:
- * This file contains functions that implement the bare minimum of chacha cipher and the PNB related analysis
+ * Unifies 32-bit (Standard) and 8-bit (Scaled) ChaCha using C++ Concepts and
+ * Traits. Features atomic ARX step support for precise fractional round
+ * attacks.
  */
 
 #pragma once
-#ifndef CHACHA_HEADER_NAME
-#define CHACHA_HEADER_NAME "commonfiles.hpp"
-#endif
-#include "commonfiles.hpp"
 
-constexpr size_t KEY_COUNT = 8;
-constexpr size_t WORD_SIZE = 32;
-constexpr size_t WORD_COUNT = 16; // state is formed by sixteen 32-bit words
+#include <algorithm>
+#include <bit>
+#include <concepts>
+#include <cstdint>
 
-constexpr size_t CHACHA_IV_START = 12;
-constexpr size_t CHACHA_IV_END = 15;
+#include "core_types.hpp"
+#include "random_util.hpp"
 
-constexpr size_t CHACHA_KEY_START = 4;
-constexpr size_t CHACHA_KEY_END = 11;
+namespace chacha {
+// ------- Traits Definition -------
 
-#define UPDATE(a, b, n) (ROTATE_LEFT((a) ^ (b), (n)))
+template <std::unsigned_integral T> struct ChaChaTraits;
 
-// ---------------------------FW QR-----------------------------------
-#define FWDQR_16(a, b, c, d, X) \
-  do                            \
-  {                             \
-    if ((X))                    \
-      (a) ^= (b);               \
-    else                        \
-      (a) += (b);               \
-    (d) = UPDATE((a), (d), 16); \
-  } while (0)
+template <> struct ChaChaTraits<u32> {
+  static constexpr const char *name = "ChaCha";
+  static constexpr u32 c0 = 0x61707865;
+  static constexpr u32 c1 = 0x3320646e;
+  static constexpr u32 c2 = 0x79622d32;
+  static constexpr u32 c3 = 0x6b206574;
 
-#define FWDQR_12(a, b, c, d, X) \
-  do                            \
-  {                             \
-    if ((X))                    \
-      (c) ^= (d);               \
-    else                        \
-      (c) += (d);               \
-    (b) = UPDATE((b), (c), 12); \
-  } while (0)
+  static constexpr int rot_a = 16;
+  static constexpr int rot_b = 12;
+  static constexpr int rot_c = 8;
+  static constexpr int rot_d = 7;
+};
 
-#define UFWDQR_12(a, b, c, d, X) \
-  do                            \
-  {                             \
-    if ((X))                    \
-      (c) ^= (d);               \
-    else                        \
-      (c) += (d);               \
-  } while (0)
+template <> struct ChaChaTraits<u8> {
+  static constexpr const char *name = "ToyChaCha";
+  static constexpr u8 c0 = 0x65;
+  static constexpr u8 c1 = 0x6e;
+  static constexpr u8 c2 = 0x32;
+  static constexpr u8 c3 = 0x74;
 
-#define FWDQR_8(a, b, c, d, X) \
-  do                           \
-  {                            \
-    if ((X))                   \
-      (a) ^= (b);              \
-    else                       \
-      (a) += (b);              \
-    (d) = UPDATE((a), (d), 8); \
-  } while (0)
+  static constexpr int rot_a = 4;
+  static constexpr int rot_b = 3;
+  static constexpr int rot_c = 2;
+  static constexpr int rot_d = 1;
+};
 
-#define FWDQR_7(a, b, c, d, X) \
-  do                           \
-  {                            \
-    if ((X))                   \
-      (c) ^= (d);              \
-    else                       \
-      (c) += (d);              \
-    (b) = UPDATE((b), (c), 7); \
-  } while (0)
+// ------- Constants & Indices -------
 
-#define FWDQR_16_12(a, b, c, d, X)     \
-  do                                   \
-  {                                    \
-    FWDQR_16((a), (b), (c), (d), (X)); \
-    FWDQR_12((a), (b), (c), (d), (X)); \
-  } while (0)
+constexpr size_t STATE_WORDS = 16;
+constexpr size_t IV_START = 12;
+constexpr size_t IV_END = 15;
+constexpr size_t KEY_START = 4;
+constexpr size_t KEY_END = 11;
 
-#define FWDQR_8_7(a, b, c, d, X)      \
-  do                                  \
-  {                                   \
-    FWDQR_8((a), (b), (c), (d), (X)); \
-    FWDQR_7((a), (b), (c), (d), (X)); \
-  } while (0)
+inline constexpr int COL[4][4] = {
+    {0, 4, 8, 12}, {1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}};
+inline constexpr int DIAG[4][4] = {
+    {0, 5, 10, 15}, {1, 6, 11, 12}, {2, 7, 8, 13}, {3, 4, 9, 14}};
 
-#define FWDQR_16_12_8_7(a, b, c, d, X)    \
-  do                                      \
-  {                                       \
-    FWDQR_16_12((a), (b), (c), (d), (X)); \
-    FWDQR_8_7((a), (b), (c), (d), (X));   \
-  } while (0)
+// ------- Forward -------
 
-// ---------------------------BW QR-----------------------------------
-#define BWDQR_7(a, b, c, d, X)        \
-  do                                  \
-  {                                   \
-    (b) = ROTATE_RIGHT((b), 7) ^ (c); \
-    if ((X))                          \
-      (c) ^= (d);                     \
-    else                              \
-      (c) -= (d);                     \
-  } while (0)
+template <std::unsigned_integral T, bool UseXor = false> struct Forward {
+  static inline void qr_step1(T &a, T &b, [[maybe_unused]] T &c, T &d) {
+    if constexpr (UseXor)
+      a ^= b;
+    else
+      a += b;
+    d = std::rotl(T(d ^ a), ChaChaTraits<T>::rot_a);
+  }
 
-#define BWDQR_8(a, b, c, d, X)        \
-  do                                  \
-  {                                   \
-    (d) = ROTATE_RIGHT((d), 8) ^ (a); \
-    if ((X))                          \
-      (a) ^= (b);                     \
-    else                              \
-      (a) -= (b);                     \
-  } while (0)
+  static inline void qr_step2([[maybe_unused]] T &a, T &b, T &c, T &d) {
+    if constexpr (UseXor)
+      c ^= d;
+    else
+      c += d;
+    b = std::rotl(T(b ^ c), ChaChaTraits<T>::rot_b);
+  }
 
-#define BWDQR_12(a, b, c, d, X)        \
-  do                                   \
-  {                                    \
-    (b) = ROTATE_RIGHT((b), 12) ^ (c); \
-    if ((X))                           \
-      (c) ^= (d);                      \
-    else                               \
-      (c) -= (d);                      \
-  } while (0)
+  static inline void qr_step3(T &a, T &b, [[maybe_unused]] T &c, T &d) {
+    if constexpr (UseXor)
+      a ^= b;
+    else
+      a += b;
+    d = std::rotl(T(d ^ a), ChaChaTraits<T>::rot_c);
+  }
 
-#define UBWDQR_12(a, b, c, d, X)        \
-  do                                   \
-  {                                    \
-    if ((X))                           \
-      (c) ^= (d);                      \
-    else                               \
-      (c) -= (d);                      \
-  } while (0)
+  static inline void qr_step4([[maybe_unused]] T &a, T &b, T &c, T &d) {
+    if constexpr (UseXor)
+      c ^= d;
+    else
+      c += d;
+    b = std::rotl(T(b ^ c), ChaChaTraits<T>::rot_d);
+  }
 
-#define BWDQR_16(a, b, c, d, X)        \
-  do                                   \
-  {                                    \
-    (d) = ROTATE_RIGHT((d), 16) ^ (a); \
-    if ((X))                           \
-      (a) ^= (b);                      \
-    else                               \
-      (a) -= (b);                      \
-  } while (0)
+  static inline void qr_half1(T &a, T &b, T &c, T &d) {
+    qr_step1(a, b, c, d);
+    qr_step2(a, b, c, d);
+  }
+  static inline void qr_half2(T &a, T &b, T &c, T &d) {
+    qr_step3(a, b, c, d);
+    qr_step4(a, b, c, d);
+  }
+  static inline void qr_full(T &a, T &b, T &c, T &d) {
+    qr_half1(a, b, c, d);
+    qr_half2(a, b, c, d);
+  }
 
-#define BWQR_7_8(a, b, c, d, X)       \
-  do                                  \
-  {                                   \
-    BWDQR_7((a), (b), (c), (d), (X)); \
-    BWDQR_8((a), (b), (c), (d), (X)); \
-  } while (0)
+  template <typename Op>
+  static inline void apply_layer(T *x, const int idx[4][4], Op op) {
+    for (int i = 0; i < 4; ++i)
+      op(x[idx[i][0]], x[idx[i][1]], x[idx[i][2]], x[idx[i][3]]);
+  }
 
-#define BWQR_12_16(a, b, c, d, X)      \
-  do                                   \
-  {                                    \
-    BWDQR_12((a), (b), (c), (d), (X)); \
-    BWDQR_16((a), (b), (c), (d), (X)); \
-  } while (0)
+  static inline void full_even(T *x) { apply_layer(x, DIAG, qr_full); }
+  static inline void full_odd(T *x) { apply_layer(x, COL, qr_full); }
 
-#define BWQR_7_8_12_16(a, b, c, d, X)    \
-  do                                     \
-  {                                      \
-    BWQR_7_8((a), (b), (c), (d), (X));   \
-    BWQR_12_16((a), (b), (c), (d), (X)); \
-  } while (0)
-
-// -------------------------------------- RoundFunctionDefinition
-// ------------------------------------------------
-/*
-fw rounds
-16
-12
-8
-7
-*/
-class FORWARD
-{
-public:
-  // XOR version of full round functions, round means even or odd round
-  void XRoundFunction(u32 *x, u32 round)
-  {
+  static inline void round_function(T *x, int round) {
     if (round & 1)
-    {
-      FWDQR_16_12_8_7(x[0], x[4], x[8], x[12], true);
-      FWDQR_16_12_8_7(x[1], x[5], x[9], x[13], true);
-      FWDQR_16_12_8_7(x[2], x[6], x[10], x[14], true);
-      FWDQR_16_12_8_7(x[3], x[7], x[11], x[15], true);
-    }
+      full_odd(x);
     else
-    {
-      FWDQR_16_12_8_7(x[0], x[5], x[10], x[15], true);
-      FWDQR_16_12_8_7(x[1], x[6], x[11], x[12], true);
-      FWDQR_16_12_8_7(x[2], x[7], x[8], x[13], true);
-      FWDQR_16_12_8_7(x[3], x[4], x[9], x[14], true);
-    }
+      full_even(x);
   }
 
-  void ODDARX_16(u32 *x)
-  {
-    FWDQR_16(x[0], x[4], x[8], x[12], false);
-    FWDQR_16(x[1], x[5], x[9], x[13], false);
-    FWDQR_16(x[2], x[6], x[10], x[14], false);
-    FWDQR_16(x[3], x[7], x[11], x[15], false);
+  /*
+  //
+  // EXPERIMENTAL / CUSTOM ROUND TEMPLATE (For fault attacks, tweaks, etc.)
+  // 
+  // To use: Uncomment, modify, and call from your hot loop instead of
+  round_function().
+  //
+  // 1. Define your modified step:
+  // static inline void qr_step2_modified(T &a, T &b, T &c, T &d) {
+  //     c += d; // e.g., dropped XOR
+  //     b = std::rotl(T(b + c), ChaChaTraits<T>::rot_b);
+  // }
+  //
+  // 2. Define your application layer using the new step:
+  // static inline void apply_experimental_round(T *x, bool is_even_round) {
+  //     auto experimental_qr = [](T& a, T& b, T& c, T& d) {
+  //         qr_step1(a, b, c, d);
+  //         qr_step2_modified(a, b, c, d); // <-- INJECTED HERE
+  //         qr_step3(a, b, c, d);
+  //         qr_step4(a, b, c, d);
+  //     };
+  //     if (is_even_round) apply_layer(x, DIAG, experimental_qr);
+  //     else               apply_layer(x, COL,  experimental_qr);
+  // }
+  // ====================================================================
+  */
+
+  // --- Fractional ARX Step Support (Forward) ---
+  static inline void apply_even_arx(T *x, int num_steps) {
+    if (num_steps == 1)
+      apply_layer(x, DIAG,
+                  [](T &a, T &b, T &c, T &d) { qr_step1(a, b, c, d); });
+    else if (num_steps == 2)
+      apply_layer(x, DIAG, qr_half1);
+    else if (num_steps == 3)
+      apply_layer(x, DIAG, [](T &a, T &b, T &c, T &d) {
+        qr_step1(a, b, c, d);
+        qr_step2(a, b, c, d);
+        qr_step3(a, b, c, d);
+      });
+  }
+  static inline void apply_odd_arx(T *x, int num_steps) {
+    if (num_steps == 1)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) { qr_step1(a, b, c, d); });
+    else if (num_steps == 2)
+      apply_layer(x, COL, qr_half1);
+    else if (num_steps == 3)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) {
+        qr_step1(a, b, c, d);
+        qr_step2(a, b, c, d);
+        qr_step3(a, b, c, d);
+      });
   }
 
-  void EVENARX_16(u32 *x)
-  {
-    FWDQR_16(x[0], x[5], x[10], x[15], false);
-    FWDQR_16(x[1], x[6], x[11], x[12], false);
-    FWDQR_16(x[2], x[7], x[8], x[13], false);
-    FWDQR_16(x[3], x[4], x[9], x[14], false);
+  static inline void finish_even_arx(T *x, int remaining_steps) {
+    if (remaining_steps == 3)
+      apply_layer(x, DIAG, [](T &a, T &b, T &c, T &d) {
+        qr_step2(a, b, c, d);
+        qr_step3(a, b, c, d);
+        qr_step4(a, b, c, d);
+      });
+    else if (remaining_steps == 2)
+      apply_layer(x, DIAG, qr_half2);
+    else if (remaining_steps == 1)
+      apply_layer(x, DIAG,
+                  [](T &a, T &b, T &c, T &d) { qr_step4(a, b, c, d); });
+  }
+  static inline void finish_odd_arx(T *x, int remaining_steps) {
+    if (remaining_steps == 3)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) {
+        qr_step2(a, b, c, d);
+        qr_step3(a, b, c, d);
+        qr_step4(a, b, c, d);
+      });
+    else if (remaining_steps == 2)
+      apply_layer(x, COL, qr_half2);
+    else if (remaining_steps == 1)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) { qr_step4(a, b, c, d); });
+  }
+};
+
+// ------- Backward -------
+
+template <std::unsigned_integral T, bool UseXor = false> struct Backward {
+  static inline void qr_step4([[maybe_unused]] T &a, T &b, T &c, T &d) {
+    b = T(std::rotr(T(b), ChaChaTraits<T>::rot_d) ^ c);
+    if constexpr (UseXor)
+      c ^= d;
+    else
+      c -= d;
   }
 
-  void ODDARX_12(u32 *x)
-  {
-    FWDQR_12(x[0], x[4], x[8], x[12], false);
-    FWDQR_12(x[1], x[5], x[9], x[13], false);
-    FWDQR_12(x[2], x[6], x[10], x[14], false);
-    FWDQR_12(x[3], x[7], x[11], x[15], false);
+  static inline void qr_step3(T &a, T &b, [[maybe_unused]] T &c, T &d) {
+    d = T(std::rotr(T(d), ChaChaTraits<T>::rot_c) ^ a);
+    if constexpr (UseXor)
+      a ^= b;
+    else
+      a -= b;
   }
 
-  void UODDARX_12(u32 *x)
-  {
-    UFWDQR_12(x[0], x[4], x[8], x[12], false);
-    UFWDQR_12(x[1], x[5], x[9], x[13], false);
-    UFWDQR_12(x[2], x[6], x[10], x[14], false);
-    UFWDQR_12(x[3], x[7], x[11], x[15], false);
+  static inline void qr_step2([[maybe_unused]] T &a, T &b, T &c, T &d) {
+    b = T(std::rotr(T(b), ChaChaTraits<T>::rot_b) ^ c);
+    if constexpr (UseXor)
+      c ^= d;
+    else
+      c -= d;
   }
 
-  void UEVENARX_12(u32 *x)
-  {
-    UFWDQR_12(x[0], x[5], x[10], x[15], false);
-    UFWDQR_12(x[1], x[6], x[11], x[12], false);
-    UFWDQR_12(x[2], x[7], x[8], x[13], false);
-    UFWDQR_12(x[3], x[4], x[9], x[14], false);
+  static inline void qr_step1(T &a, T &b, [[maybe_unused]] T &c, T &d) {
+    d = T(std::rotr(T(d), ChaChaTraits<T>::rot_a) ^ a);
+    if constexpr (UseXor)
+      a ^= b;
+    else
+      a -= b;
   }
 
-
-
-  void EVENARX_12(u32 *x)
-  {
-    FWDQR_12(x[0], x[5], x[10], x[15], false);
-    FWDQR_12(x[1], x[6], x[11], x[12], false);
-    FWDQR_12(x[2], x[7], x[8], x[13], false);
-    FWDQR_12(x[3], x[4], x[9], x[14], false);
+  static inline void qr_half1(T &a, T &b, T &c, T &d) {
+    qr_step4(a, b, c, d);
+    qr_step3(a, b, c, d);
+  }
+  static inline void qr_half2(T &a, T &b, T &c, T &d) {
+    qr_step2(a, b, c, d);
+    qr_step1(a, b, c, d);
+  }
+  static inline void qr_full(T &a, T &b, T &c, T &d) {
+    qr_half1(a, b, c, d);
+    qr_half2(a, b, c, d);
   }
 
-  void ODDARX_8(u32 *x)
-  {
-    FWDQR_8(x[0], x[4], x[8], x[12], false);
-    FWDQR_8(x[1], x[5], x[9], x[13], false);
-    FWDQR_8(x[2], x[6], x[10], x[14], false);
-    FWDQR_8(x[3], x[7], x[11], x[15], false);
+  template <typename Op>
+  static inline void apply_layer(T *x, const int idx[4][4], Op op) {
+    for (int i = 0; i < 4; ++i)
+      op(x[idx[i][0]], x[idx[i][1]], x[idx[i][2]], x[idx[i][3]]);
   }
 
-  void EVENARX_8(u32 *x)
-  {
-    FWDQR_8(x[0], x[5], x[10], x[15], false);
-    FWDQR_8(x[1], x[6], x[11], x[12], false);
-    FWDQR_8(x[2], x[7], x[8], x[13], false);
-    FWDQR_8(x[3], x[4], x[9], x[14], false);
-  }
+  static inline void full_even(T *x) { apply_layer(x, DIAG, qr_full); }
+  static inline void full_odd(T *x) { apply_layer(x, COL, qr_full); }
 
-  void ODDARX_7(u32 *x)
-  {
-    FWDQR_7(x[0], x[4], x[8], x[12], false);
-    FWDQR_7(x[1], x[5], x[9], x[13], false);
-    FWDQR_7(x[2], x[6], x[10], x[14], false);
-    FWDQR_7(x[3], x[7], x[11], x[15], false);
-  }
-
-  void EVENARX_7(u32 *x)
-  {
-    FWDQR_7(x[0], x[5], x[10], x[15], false);
-    FWDQR_7(x[1], x[6], x[11], x[12], false);
-    FWDQR_7(x[2], x[7], x[8], x[13], false);
-    FWDQR_7(x[3], x[4], x[9], x[14], false);
-  }
-
-  void Half_1_EvenRF(u32 *x)
-  {
-    EVENARX_16(x);
-    EVENARX_12(x);
-  }
-  void Half_1_OddRF(u32 *x)
-  {
-    ODDARX_16(x);
-    ODDARX_12(x);
-  }
-
-  void Half_2_EvenRF(u32 *x)
-  {
-    EVENARX_8(x);
-    EVENARX_7(x);
-  }
-
-  void Half_2_OddRF(u32 *x)
-  {
-    ODDARX_8(x);
-    ODDARX_7(x);
-  }
-  // full round function, round means even or odd round
-  void RoundFunction(u32 *x, u32 round)
-  {
+  static inline void round_function(T *x, int round) {
     if (round & 1)
-    {
-      Half_1_OddRF(x);
-      Half_2_OddRF(x);
-    }
+      full_odd(x);
     else
-    {
-      Half_1_EvenRF(x);
-      Half_2_EvenRF(x);
-    }
-  }
-} frward;
-
-/* bw rounds
-7
-8
-12
-16
-*/
-
-class BACKWARD
-{
-public:
-  // XOR version of full round functions, round means even or odd round
-  void XRoundFunction(u32 *x, u32 round)
-  {
-    if (round & 1)
-    {
-      BWQR_7_8_12_16(x[0], x[4], x[8], x[12], true);
-      BWQR_7_8_12_16(x[1], x[5], x[9], x[13], true);
-      BWQR_7_8_12_16(x[2], x[6], x[10], x[14], true);
-      BWQR_7_8_12_16(x[3], x[7], x[11], x[15], true);
-    }
-    else
-    {
-      BWQR_7_8_12_16(x[0], x[5], x[10], x[15], true);
-      BWQR_7_8_12_16(x[1], x[6], x[11], x[12], true);
-      BWQR_7_8_12_16(x[2], x[7], x[8], x[13], true);
-      BWQR_7_8_12_16(x[3], x[4], x[9], x[14], true);
-    }
+      full_even(x);
   }
 
-  void ODDARX_16(u32 *x)
-  {
-    BWDQR_16(x[0], x[4], x[8], x[12], false);
-    BWDQR_16(x[1], x[5], x[9], x[13], false);
-    BWDQR_16(x[2], x[6], x[10], x[14], false);
-    BWDQR_16(x[3], x[7], x[11], x[15], false);
+  // --- Fractional ARX Step Support (Backward) ---
+  static inline void apply_even_arx(T *x, int num_steps) {
+    if (num_steps == 3)
+      apply_layer(x, DIAG, [](T &a, T &b, T &c, T &d) {
+        qr_step3(a, b, c, d);
+        qr_step2(a, b, c, d);
+        qr_step1(a, b, c, d);
+      });
+    else if (num_steps == 2)
+      apply_layer(x, DIAG, qr_half2);
+    else if (num_steps == 1)
+      apply_layer(x, DIAG,
+                  [](T &a, T &b, T &c, T &d) { qr_step1(a, b, c, d); });
+  }
+  static inline void apply_odd_arx(T *x, int num_steps) {
+    if (num_steps == 3)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) {
+        qr_step3(a, b, c, d);
+        qr_step2(a, b, c, d);
+        qr_step1(a, b, c, d);
+      });
+    else if (num_steps == 2)
+      apply_layer(x, COL, qr_half2);
+    else if (num_steps == 1)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) { qr_step1(a, b, c, d); });
   }
 
-  void EVENARX_16(u32 *x)
-  {
-    BWDQR_16(x[0], x[5], x[10], x[15], false);
-    BWDQR_16(x[1], x[6], x[11], x[12], false);
-    BWDQR_16(x[2], x[7], x[8], x[13], false);
-    BWDQR_16(x[3], x[4], x[9], x[14], false);
+  static inline void finish_even_arx(T *x, int remaining_steps) {
+    if (remaining_steps == 3)
+      apply_layer(x, DIAG, [](T &a, T &b, T &c, T &d) {
+        qr_step4(a, b, c, d);
+        qr_step3(a, b, c, d);
+        qr_step2(a, b, c, d);
+      });
+    else if (remaining_steps == 2)
+      apply_layer(x, DIAG, qr_half1);
+    else if (remaining_steps == 1)
+      apply_layer(x, DIAG,
+                  [](T &a, T &b, T &c, T &d) { qr_step4(a, b, c, d); });
   }
-
-  void ODDARX_12(u32 *x)
-  {
-    BWDQR_12(x[0], x[4], x[8], x[12], false);
-    BWDQR_12(x[1], x[5], x[9], x[13], false);
-    BWDQR_12(x[2], x[6], x[10], x[14], false);
-    BWDQR_12(x[3], x[7], x[11], x[15], false);
+  static inline void finish_odd_arx(T *x, int remaining_steps) {
+    if (remaining_steps == 3)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) {
+        qr_step4(a, b, c, d);
+        qr_step3(a, b, c, d);
+        qr_step2(a, b, c, d);
+      });
+    else if (remaining_steps == 2)
+      apply_layer(x, COL, qr_half1);
+    else if (remaining_steps == 1)
+      apply_layer(x, COL, [](T &a, T &b, T &c, T &d) { qr_step4(a, b, c, d); });
   }
-  void EVENARX_12(u32 *x)
-  {
-    BWDQR_12(x[0], x[5], x[10], x[15], false);
-    BWDQR_12(x[1], x[6], x[11], x[12], false);
-    BWDQR_12(x[2], x[7], x[8], x[13], false);
-    BWDQR_12(x[3], x[4], x[9], x[14], false);
-  }
+};
 
-  void UODDARX_12(u32 *x)
-  {
-    UBWDQR_12(x[0], x[4], x[8], x[12], false);
-    UBWDQR_12(x[1], x[5], x[9], x[13], false);
-    UBWDQR_12(x[2], x[6], x[10], x[14], false);
-    UBWDQR_12(x[3], x[7], x[11], x[15], false);
-  }
-  void UEVENARX_12(u32 *x)
-  {
-    UBWDQR_12(x[0], x[5], x[10], x[15], false);
-    UBWDQR_12(x[1], x[6], x[11], x[12], false);
-    UBWDQR_12(x[2], x[7], x[8], x[13], false);
-    UBWDQR_12(x[3], x[4], x[9], x[14], false);
-  }
+// ------- State Management & Encryption -------
 
-  void ODDARX_8(u32 *x)
-  {
-    BWDQR_8(x[0], x[4], x[8], x[12], false);
-    BWDQR_8(x[1], x[5], x[9], x[13], false);
-    BWDQR_8(x[2], x[6], x[10], x[14], false);
-    BWDQR_8(x[3], x[7], x[11], x[15], false);
-  }
+template <std::unsigned_integral T>
+inline void init_iv_const(T *x, bool random_flag = true, T value = 1) {
+  x[0] = ChaChaTraits<T>::c0;
+  x[1] = ChaChaTraits<T>::c1;
+  x[2] = ChaChaTraits<T>::c2;
+  x[3] = ChaChaTraits<T>::c3;
 
-  void EVENARX_8(u32 *x)
-  {
-    BWDQR_8(x[0], x[5], x[10], x[15], false);
-    BWDQR_8(x[1], x[6], x[11], x[12], false);
-    BWDQR_8(x[2], x[7], x[8], x[13], false);
-    BWDQR_8(x[3], x[4], x[9], x[14], false);
-  }
+  for (size_t i = IV_START; i <= IV_END; ++i)
+    x[i] = random_flag ? random_util::random_number<T>() : value;
+}
 
-  void ODDARX_7(u32 *x)
-  {
-    BWDQR_7(x[0], x[4], x[8], x[12], false);
-    BWDQR_7(x[1], x[5], x[9], x[13], false);
-    BWDQR_7(x[2], x[6], x[10], x[14], false);
-    BWDQR_7(x[3], x[7], x[11], x[15], false);
-  }
+template <std::unsigned_integral T> inline void insert_key(T *x, const T *k) {
+  for (size_t i = KEY_START; i <= KEY_END; ++i)
+    x[i] = k[i - 4];
+}
 
-  void EVENARX_7(u32 *x)
-  {
-    BWDQR_7(x[0], x[5], x[10], x[15], false);
-    BWDQR_7(x[1], x[6], x[11], x[12], false);
-    BWDQR_7(x[2], x[7], x[8], x[13], false);
-    BWDQR_7(x[3], x[4], x[9], x[14], false);
-  }
+template <std::unsigned_integral T>
+inline void calculate_word_bit(u16 index, u16 &word, u16 &bit) {
+  constexpr u16 bits_per_word = sizeof(T) * 8;
+  word = (index / bits_per_word) + KEY_START;
+  bit = index % bits_per_word;
+}
 
-  void Half_1_EvenRF(u32 *x)
-  {
-    EVENARX_7(x);
-    EVENARX_8(x);
-  }
-  void Half_1_OddRF(u32 *x)
-  {
-    ODDARX_7(x);
-    ODDARX_8(x);
-  }
-
-  void Half_2_EvenRF(u32 *x)
-  {
-    EVENARX_12(x);
-    EVENARX_16(x);
-  }
-
-  void Half_2_OddRF(u32 *x)
-  {
-    ODDARX_12(x);
-    ODDARX_16(x);
-  }
-  // full round function, round means even or odd round
-  void RoundFunction(u32 *x, u32 round)
-  {
-    if (round & 1)
-    {
-      Half_1_OddRF(x);
-      Half_2_OddRF(x);
-    }
-    else
-    {
-      Half_1_EvenRF(x);
-      Half_2_EvenRF(x);
-    }
-  }
-} bckward;
-
-namespace chacha
-{
-  u16 column[4][4] = {
-      {0, 4, 8, 12}, {1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}};
-  u16 diag[4][4] = {
-      {0, 5, 10, 15}, {1, 6, 11, 12}, {2, 7, 8, 13}, {3, 4, 9, 14}};
-  void init_iv_const(u32 *x, bool random_flag = true, u32 value = 1)
-  {
-    x[0] = 0x61707865;
-    x[1] = 0x3320646e;
-    x[2] = 0x79622d32;
-    x[3] = 0x6b206574;
-    if (random_flag)
-    {
-      for (size_t index{CHACHA_IV_START}; index <= CHACHA_IV_END; ++index)
-        x[index] = RandomNumber<u32>(); // IV
-    }
-    else
-    {
-      for (size_t index{0}; index < WORD_COUNT; ++index)
-        x[index] = value;
-    }
-  }
-  void insert_key(u32 *x, u32 *k)
-  {
-    for (size_t index{CHACHA_KEY_START}; index <= CHACHA_KEY_END; ++index)
-      x[index] = k[index - 4];
-  }
-  // calculates the position of the index in the state matrix
-  void calculate_word_bit(u16 index, u16 &WORD, u16 &BIT)
-  {
-    WORD = (index / WORD_SIZE) + 4;
-    BIT = index % WORD_SIZE;
-  }
-
-  template <typename T>
-  struct HW_Config
-  {
-    static_assert(std::is_unsigned_v<T>, "State type must be an unsigned integer type");
-
-    const T *state = nullptr;           // pointer to full state (e.g., 16 words)
-    const u16 (*column)[4] = nullptr;   // 4x4 mapping: column[col][i] -> state index
-    const u16 (*diagonal)[4] = nullptr; // 4x4 mapping: diagonal[d][i] -> state index
-
-    u16 column_no = 0; // 0..3
-    u16 diag_no = 0;   // 0..3
-  };
-
-  // --- public helpers you’ll actually call ---
-  template <typename T>
-  int computeHammingWeight(const HW_Config<T> &cfg)
-  {
-    static_assert(std::is_unsigned_v<T>, "State type must be an unsigned integer type");
-
-    if (!cfg.state)
-      throw std::invalid_argument("HW_Config: state pointer is null.");
-
-    int hw = 0;
-
-    if (cfg.column && cfg.column_no < 4)
-    {
-      for (int i = 0; i < 4; ++i)
-        hw += ops::hammingWeight(cfg.state[cfg.column[cfg.column_no][i]]);
-    }
-    else if (cfg.diagonal && cfg.diag_no < 4)
-    {
-      for (int i = 0; i < 4; ++i)
-        hw += ops::hammingWeight(cfg.state[cfg.diagonal[cfg.diag_no][i]]);
-    }
-    else
-    {
-      throw std::invalid_argument("HW_Config: No valid mapping provided.");
-    }
-
-    return hw;
-  }
-
-  struct InitKey
-  {
-    // randflag = true, means random key values, otherwise key = value
-    void key_256bit(u32 *k, bool random_flag = true, u32 value = 0)
-    {
-      if (random_flag)
-      {
-        for (size_t index{0}; index < KEY_COUNT; ++index)
-          k[index] = RandomNumber<u32>();
-      }
-      else
-      {
-        for (size_t index{0}; index < KEY_COUNT; ++index)
-          k[index] = value;
-      }
-    }
-    void key_128bit(u32 *k, bool random_flag = true, u32 value = 1)
-    {
-      if (random_flag)
-      {
-        for (size_t index{0}; index < KEY_COUNT / 2; ++index)
-        {
-          k[index] = RandomNumber<u32>();
-          k[index + 4] = k[index];
-        }
-      }
-      else
-      {
-        for (size_t index{0}; index < KEY_COUNT / 2; ++index)
-        {
-          k[index] = value;
-          k[index + 4] = k[index];
-        }
-      }
-    }
-  };
-
-  struct PNBInfo
-  {
-    std::string pnb_file;            // optional: file with precomputed PNBs
-    double neutrality_measure = -1.0; // threshold for neutrality
-
-    bool pnb_search_flag = false;      // run a PNB search?
-    bool pnb_pattern_flag = false;     // use pattern filtering?
-    bool pnb_carrylock_flag = false;   // enable carry-lock analysis?
-    bool pnb_syncopation_flag = false; // enable syncopation filter?
-
-    std::size_t potential_pnb_count = 0; // number of potential PNBs found
-
-    std::vector<u16> pnbs; // list of discovered PNB bit positions
-    std::vector<std::size_t> pnbs_in_pattern;
-    std::vector<std::size_t> pnbs_in_border;
-    std::vector<std::size_t> rest_pnbs;
-
-    // (Optional) metadata
-    std::string pattern_name;       // e.g., "carrylock-3R" or "sync-4.5R"
-    std::string experiment_label;   // useful for printing/logging
-    bool use_threshold_mode = true; // use neutrality threshold
-    double min_neutrality = 0.0;
-    double max_neutrality = 1.0;
-
-    // Helpers
-    bool has_pnbs() const { return !pnbs.empty(); }
-  };
-
-  void showPNBconfig(const PNBInfo &cfg, std::ostream &output)
-  {
-    output << "\n+----------------------------------[ PNB Config ]-------------------------------------+\n";
-
-    // Neutrality measure
-    if (cfg.neutrality_measure >= 0.0)
-      output << "| Neutrality Measure:          " << std::fixed << std::setprecision(3)
-             << (cfg.neutrality_measure) << "\n";
-
-    // PNB file name and optionally the last value
-    if (!cfg.pnb_file.empty())
-    {
-      output << "| PNB File:                    " << cfg.pnb_file << "\n";
-      output << "| #PNBs:                       " << cfg.pnbs.size() << "\n";
-    }
-
-    if (cfg.potential_pnb_count)
-      output << "| Potential PNB Count:      "
-             << (cfg.potential_pnb_count) << "\n";
-
-    // Pattern flag
-    if (!cfg.pnb_search_flag)
-    {
-      output << "| Carrylock Flag:              " << (cfg.pnb_carrylock_flag ? "True" : "False") << "\n";
-      output << "| Pattern Flag:                " << (cfg.pnb_pattern_flag ? "True" : "False") << "\n";
-      output << "| Syncopation Flag:            " << (cfg.pnb_syncopation_flag ? "True" : "False") << "\n";
-    }
-    output << "+-------------------------------------------------------------------------------------+\n";
-  }
-
-  bool openPNBFile(const std::string &filename, PNBInfo &cfg)
-  {
-    std::ifstream file(filename);
-    if (!file.is_open())
-    {
-      std::cerr << "⚠ Could not open PNB file: " << filename << "\n"
-                << "   Expected format example:\n"
-                << "   1 2 3 7 8 21 3 2 1\n"
-                << "   (values can also be comma-separated)\n"
-                << "   - Last 3 numbers = counts of [first_list, second_list, third_list]\n";
-      return false;
-    }
-
-    std::vector<u16> data;
-    std::string line;
-
-    while (std::getline(file, line))
-    {
-      //  Allow comma-separated values
-      std::replace(line.begin(), line.end(), ',', ' ');
-
-      std::istringstream iss(line);
-      int temp;
-      while (iss >> temp)
-      {
-        if (temp < 0 || temp > 256)
-        {
-          std::cerr << "⚠ Invalid value in file: " << temp << "\n"
-                    << "  Each PNB value must be between 0 and 256.\n"
-                    << "   Example format:\n"
-                    << "   1, 2, 3, 7, 8, 21, 3, 2, 1\n";
-          return false;
-        }
-        data.push_back(static_cast<u16>(temp));
-      }
-    }
-    file.close();
-
-    if (data.size() < 3)
-    {
-      std::cerr << "⚠ PNB file too short — missing the 3-footer counts.\n"
-                << "  Expected format:\n"
-                << "   [PNBs...] [count_first] [count_second] [count_third]\n"
-                << "   Example: 1 2 3 7 8 21 3 2 1\n";
-      return false;
-    }
-
-    //  Read footer counts
-    size_t m1 = data[data.size() - 3];
-    size_t m2 = data[data.size() - 2];
-    size_t m3 = data[data.size() - 1];
-    size_t count = m1 + m2 + m3;
-
-    //  Remove footer
-    data.resize(data.size() - 3);
-
-    if (data.size() < count)
-    {
-      std::cerr << "⚠ Size mismatch: expected at least " << count
-                << " PNBs but file has only " << data.size() << ".\n"
-                << "  Example correct format:\n"
-                << "   1 2 3 7 8 21 3 2 1\n"
-                << "   (6 PNB values + 3 footer counts)\n";
-      return false;
-    }
-
-    // Always assign pnbs
-    cfg.pnbs.assign(data.begin(), data.begin() + count);
-
-    //  Conditionally split
-    if (cfg.pnb_pattern_flag)
-    {
-      cfg.pnbs_in_pattern.assign(data.begin(), data.begin() + m1);
-      cfg.pnbs_in_border.assign(data.begin() + m1, data.begin() + m1 + m2);
-      cfg.rest_pnbs.assign(data.begin() + m1 + m2, data.begin() + count);
-    }
-    else
-    {
-      cfg.pnbs_in_pattern.clear();
-      cfg.pnbs_in_border.clear();
-      cfg.rest_pnbs.clear();
-    }
-
-    return true;
-  }
-
-  template <class T>
-  std::tuple<std::vector<T>, std::vector<T>, std::vector<T>>
-  splitConsecutive(const std::vector<T> &elems)
-  {
-    static_assert(std::is_integral_v<T>, "T must be integral");
-
-    if (elems.empty())
-      return {{}, {}, {}};
-
-    std::vector<T> first, second, third;
-    std::vector<T> cur;
-    cur.reserve(elems.size());
-
-    cur.push_back(elems[0]);
-    for (std::size_t i = 1; i < elems.size(); ++i)
-    {
-      if (elems[i] == cur.back() + 1)
-      {
-        cur.push_back(elems[i]);
-      }
-      else
-      {
-        if (cur.size() >= 2)
-        {
-          first.insert(first.end(), cur.begin(), cur.end() - 1);
-          second.push_back(cur.back());
-        }
-        else
-        {
-          third.push_back(cur[0]);
-        }
-        cur.clear();
-        cur.push_back(elems[i]);
-      }
-    }
-    // flush last block
-    if (cur.size() >= 2)
-    {
-      first.insert(first.end(), cur.begin(), cur.end() - 1);
-      second.push_back(cur.back());
-    }
-    else
-    {
-      third.push_back(cur[0]);
-    }
-
-    return {first, second, third};
-  }
-
-  template <class T>
-  std::vector<T> buildMasterPNBList(std::vector<T> pnbs /* by value so we can sort */)
-  {
-    static_assert(std::is_integral_v<T>, "T must be integral");
-
-    std::sort(pnbs.begin(), pnbs.end()); // like your Python `sorted(elements)`
-
-    auto [first, second, third] = splitConsecutive(pnbs);
-
-    std::vector<T> master;
-    master.reserve(first.size() + second.size() + third.size() + 3);
-    master.insert(master.end(), first.begin(), first.end());
-    master.insert(master.end(), second.begin(), second.end());
-    master.insert(master.end(), third.begin(), third.end());
-    master.push_back(static_cast<T>(first.size()));
-    master.push_back(static_cast<T>(second.size()));
-    master.push_back(static_cast<T>(third.size()));
-    return master;
-  }
-
-  template <class T>
-  void writeListToFile(const std::vector<T> &v, const std::string &path)
-  {
-    std::ofstream out(path);
-    for (std::size_t i = 0; i < v.size(); ++i)
-    {
-      out << v[i] << (i + 1 == v.size() ? '\n' : ' ');
-    }
+template <size_t KeyWords, std::unsigned_integral T>
+inline void init_key(T *k, bool random_flag = true, T value = 0) {
+  static_assert(KeyWords == 8 || KeyWords == 4, "KeyWords must be 8 or 4");
+  for (size_t i = 0; i < KeyWords; ++i) {
+    k[i] = random_flag ? random_util::random_number<T>() : value;
+    if constexpr (KeyWords == 4)
+      k[i + 4] = k[i];
   }
 }
+} // namespace chacha
